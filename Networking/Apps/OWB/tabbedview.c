@@ -28,12 +28,14 @@ IPTR forwardedAttributes[] =
 { 
     MUIA_WebView_ToolTip, 
     MUIA_WebView_State,
+    MUIA_WebView_ErrorText,
     MUIA_WebView_EstimatedProgress,
     MUIA_WebView_URL,
     MUIA_WebView_Title,
     MUIA_WebView_CanGoBack,
     MUIA_WebView_CanGoForward,
     MUIA_WebView_Active,
+    MUIA_WebView_FullScreen,
 }; 
 
 /*** Methods ****************************************************************/

@@ -20,6 +20,8 @@
 
 #include <WebViewZune.h>
 
+#include <string.h>
+
 #include "locale.h"
 #include "downloadmanager.h"
 #include "preferencesmanager.h"
@@ -51,12 +53,12 @@ static Object* getActiveWindow(Object* app)
 	    }
 	}
     }
-    
+
     return NULL;
 }
 
 static IPTR ForwardCallToActiveWindowFunc(struct Hook *hook, Object *app, IPTR *msg)
-{   
+{
     struct List *wlist = NULL;
     APTR         wstate;
     Object      *curwin;
@@ -88,7 +90,7 @@ static IPTR RequestFileFunc(struct Hook *hook, Object *app, struct Hook **forwar
 	{ ASLFR_InitialDrawer, (IPTR)dirpart                  },
 	{ ASLFR_InitialFile,   (IPTR)filepart                 },
 	{ TAG_END                                             }
-    }; 
+    };
 
     if((fr = (struct FileRequester *) AllocAslRequest(ASL_FileRequest, frtags)))
     {
@@ -99,7 +101,7 @@ static IPTR RequestFileFunc(struct Hook *hook, Object *app, struct Hook **forwar
 	    strcpy(fullname, "file:///");
 	    strncat(fullname, fr->fr_Drawer, 490);
 	    AddPart(fullname, fr->fr_File, 499);
-	    
+
 	    DoMethod(app, MUIM_CallHook, *forwardCallHook, MUIM_BrowserWindow_OpenURLInActiveTab, fullname);
 	}
 	FreeAslRequest(fr);
@@ -108,7 +110,7 @@ static IPTR RequestFileFunc(struct Hook *hook, Object *app, struct Hook **forwar
     {
 	return FALSE;
     }
-    
+
     return TRUE;
 }
 
@@ -162,9 +164,9 @@ static IPTR SynthetizeKeyboardEventFunc(struct Hook *hook, Object *app, IPTR *da
 /*** Methods ****************************************************************/
 IPTR BrowserApp__OM_NEW(Class *CLASS, Object *self, struct opSet *message)
 {
-    struct BrowserApp_DATA *data = NULL; 
+    struct BrowserApp_DATA *data = NULL;
     struct TagItem *tag = NULL, *tstate = message->ops_AttrList;
-    
+
     Object *downloadManager, *preferencesManager, *bookmarkManager;
     Object *preferences, *fileMenu, *mainMenustrip;
     Object *quitMenuItem, *openTabMenuItem, *openWindowMenuItem, *closeTabMenuItem, *closeWindowMenuItem;
@@ -181,14 +183,14 @@ IPTR BrowserApp__OM_NEW(Class *CLASS, Object *self, struct opSet *message)
             default:
                 continue; /* Don't supress non-processed tags */
         }
-        
+
         tag->ti_Tag = TAG_IGNORE;
     }
 
     preferences = NewObject(BrowserPreferences_CLASS->mcc_Class, NULL, TAG_END);
     if(!preferences)
 	return (IPTR) NULL;
-    
+
     self = (Object *) DoSuperNewTags
     (
         CLASS, self, NULL,
@@ -278,21 +280,21 @@ IPTR BrowserApp__OM_NEW(Class *CLASS, Object *self, struct opSet *message)
 		    End),
 		End),
             End),
-        SubWindow, (IPTR)(downloadManager = NewObject(DownloadManager_CLASS->mcc_Class, NULL, 
+        SubWindow, (IPTR)(downloadManager = NewObject(DownloadManager_CLASS->mcc_Class, NULL,
 	    MUIA_Window_Width, MUIV_Window_AltWidth_Screen(50),
 	    MUIA_Window_Height, MUIV_Window_AltHeight_Screen(50),
 	    MUIA_DownloadManager_Preferences, (IPTR)preferences,
             TAG_END)),
-        SubWindow, (IPTR)(preferencesManager = NewObject(PreferencesManager_CLASS->mcc_Class, NULL, 
+        SubWindow, (IPTR)(preferencesManager = NewObject(PreferencesManager_CLASS->mcc_Class, NULL,
             MUIA_PreferencesManager_Preferences, (IPTR)preferences,
             TAG_END)),
-        SubWindow, (IPTR)(bookmarkManager = NewObject(BookmarkManager_CLASS->mcc_Class, NULL, 
+        SubWindow, (IPTR)(bookmarkManager = NewObject(BookmarkManager_CLASS->mcc_Class, NULL,
 	    MUIA_Window_Width, MUIV_Window_AltWidth_Screen(50),
 	    MUIA_Window_Height, MUIV_Window_AltHeight_Screen(50),
        	    TAG_END)),
         TAG_MORE, (IPTR) message->ops_AttrList
     );
-    
+
     if (self == NULL)
 	return (IPTR) NULL;
 
@@ -361,7 +363,7 @@ IPTR BrowserApp__OM_NEW(Class *CLASS, Object *self, struct opSet *message)
     DoMethod(bookmarkManagerMenuItem, MUIM_Notify, MUIA_Menuitem_Trigger, MUIV_EveryTime,
 	    bookmarkManager, (IPTR) 3,
 	    MUIM_Set, MUIA_Window_Activate, (IPTR) TRUE);
-    
+
     /* Download manager menu item */
     DoMethod(downloadManagerMenuItem, MUIM_Notify, MUIA_Menuitem_Trigger, MUIV_EveryTime,
 	    downloadManager, (IPTR) 3,
@@ -427,7 +429,7 @@ IPTR BrowserApp__OM_SET(Class *cl, Object *obj, struct opSet *msg)
     struct BrowserApp_DATA *data = INST_DATA(cl, obj);
     struct TagItem *tags  = msg->ops_AttrList;
     struct TagItem *tag;
-    
+
     while ((tag = NextTagItem(&tags)) != NULL)
     {
     	switch(tag->ti_Tag)
@@ -478,7 +480,7 @@ IPTR BrowserApp__OM_SET(Class *cl, Object *obj, struct opSet *msg)
     		continue;
 	}
     }
-    
+
     return DoSuperMethodA(cl, obj, (Msg)msg);
 }
 
@@ -486,7 +488,7 @@ IPTR BrowserApp__OM_GET(Class *cl, Object *obj, struct opGet *msg)
 {
     struct BrowserApp_DATA *data = INST_DATA(cl, obj);
     IPTR retval = TRUE;
-    
+
     switch(msg->opg_AttrID)
     {
 	case MUIA_BrowserApp_BookmarkManagerOpened:
@@ -502,7 +504,7 @@ IPTR BrowserApp__OM_GET(Class *cl, Object *obj, struct opGet *msg)
 	    retval = DoSuperMethodA(cl, obj, (Msg)msg);
 	    break;
     }
-    
+
     return retval;
 }
 
@@ -510,7 +512,7 @@ IPTR BrowserApp__MUIM_BrowserApp_OpenNewWindow(Class *cl, Object *app, struct MU
 {
     Object* webView = NULL;
     Object* wnd = NULL;
-    
+
     if(msg->specification)
     {
 	wnd = NewObject(BrowserWindow_CLASS->mcc_Class, NULL,
@@ -535,14 +537,14 @@ IPTR BrowserApp__MUIM_BrowserApp_OpenNewWindow(Class *cl, Object *app, struct MU
 	    MUIA_Window_AltWidth, MUIV_Window_AltWidth_Screen(75),
 	    MUIA_Window_AltHeight, MUIV_Window_AltHeight_Screen(75),
 	    MUIA_BrowserWindow_WebViewPointer, &webView,
-	    TAG_END);	
+	    TAG_END);
     }
-    
+
     DoMethod(app, OM_ADDMEMBER, wnd);
 
     set(wnd, MUIA_Window_Open, TRUE);
     set(wnd, MUIA_Window_Activate, TRUE);
-	
+
     return (IPTR) webView;
 }
 
@@ -579,7 +581,7 @@ IPTR BrowserApp__MUIM_BrowserApp_CloseWindow(Class *cl, Object *obj, struct MUIP
 	    }
 	}
     }
-    
+
     /* if it's the last one, exit the application */
     if(windowsCount == 1)
     {
@@ -589,14 +591,14 @@ IPTR BrowserApp__MUIM_BrowserApp_CloseWindow(Class *cl, Object *obj, struct MUIP
     {
 	DoMethod(_app(msg->win), MUIM_Application_PushMethod, obj, 3, MUIM_CallHook, &data->closeWindowHook, msg->win);
     }
-    
+
     return TRUE;
 }
 
 IPTR BrowserApp__MUIM_BrowserApp_Bookmark(struct IClass *cl, Object *obj, struct MUIP_BrowserApp_Bookmark *msg)
 {
     struct BrowserApp_DATA *data = (struct BrowserApp_DATA *) INST_DATA(cl, obj);
-    
+
     return DoMethod(data->bookmarkManager, MUIM_BookmarkManager_Bookmark, msg->title, msg->url);
 }
 

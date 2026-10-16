@@ -12,7 +12,7 @@
 #define CATALOG_NAME     "owb.catalog"
 #define CATALOG_VERSION  5
 
-struct Catalog *catalog;
+static struct Catalog *catalog;
 
 
 CONST_STRPTR _(ULONG id)

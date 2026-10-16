@@ -1,5 +1,5 @@
 /*
-    Copyright © 2009, The AROS Development Team. All rights reserved.
+    Copyright ï¿½ 2009, The AROS Development Team. All rights reserved.
     $Id$
 */
 
@@ -18,6 +18,8 @@
 
 #include <WebViewZune.h>
 
+#include <WebViewZune.h>
+
 #include "locale.h"
 #include "browserapp.h"
 #include "browserwindow.h"
@@ -28,7 +30,7 @@ int main(void)
     struct RDArgs *args = NULL;
     char *url = NULL;
     Object *wnd, *app;
-    
+
     if((args = ReadArgs("URL", argArray, NULL)) != NULL)
     {
 	if(argArray[0])
@@ -45,7 +47,7 @@ int main(void)
 
     Locale_Initialize();
     
-    SetVar("FONTCONFIG_PATH", "PROGDIR:fonts/config", -1, LV_VAR | GVF_LOCAL_ONLY);
+    SetVar("FONTCONFIG_FILE", "PROGDIR:fonts/config/fonts.conf", -1, LV_VAR | GVF_LOCAL_ONLY);
     SetVar("DISABLE_NI_WARNING", "1", -1, LV_VAR | GVF_LOCAL_ONLY);
     
     // GUI creation
@@ -83,6 +85,9 @@ int main(void)
         /* Destroy our application and all its objects */
         MUI_DisposeObject(app);
     }
+
+    /* Stop WebKit's threads once no view is left */
+    WebView_Terminate();
 
     Locale_Deinitialize();
     

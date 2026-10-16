@@ -1,0 +1,20 @@
+# Copyright (C) 2026, The AROS Development Team. All rights reserved.
+
+include $(SRCDIR)/config/aros-contrib.cfg
+
+#MM contrib-zune-classes-webkitty-demos : includes linklibs contrib-zune-classes-webkitty \
+#MM     contrib-zune-classes-webkitty-demos-icudata
+
+# libiconv (needed by ffmpeg) lives in the contrib SDK
+USER_LDFLAGS := -L$(AROS_CONTRIB_LIB)
+
+%build_prog mmake=contrib-zune-classes-webkitty-demos progname=MiniBrowser \
+    files=MiniBrowser targetdir=$(AROS_CONTRIB)/Zune/WebKitty/Demos \
+    uselibs="webkitty" alwayscxxlink=yes nix=yes
+
+# ICU data files, read by the engine from PROGDIR:Resources
+#MM- contrib-zune-classes-webkitty-demos-icudata : contrib-icu4c
+%copy_dir_recursive src="$(AROS_DEVELOPER)/share/icu/data" dst="$(AROS_CONTRIB)/Zune/WebKitty/Demos/Resources" \
+    mmake=contrib-zune-classes-webkitty-demos-icudata
+
+%common

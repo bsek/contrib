@@ -4,27 +4,17 @@
 include $(SRCDIR)/config/aros-contrib.cfg
 
 EXEDIR := $(AROS_CONTRIB)/Networking/Apps/OWB
-    
+
 USER_CFLAGS := -DZUNE_BUILTIN_SCROLLGROUP=0 -DWTF_PLATFORM_AROS=1
 USER_INCLUDES := -I$(AROS_CONTRIB_INCLUDES)
 USER_LDFLAGS := -L$(AROS_CONTRIB_LIB)
 
-# The webkit code can only be compiled if flex <2.5 is used
-# otherwise it malforms tokenize.cpp. older compilers will silently
-# compile the code and not generate an error - so disable it if
-# we dont have a suitable flex version
-
-HOST_FLEX_MAJOR = $(shell echo "$(HOST_FLEX_VERSION)" | cut -d"." -f1)
-HOST_FLEX_MINOR = $(shell echo "$(HOST_FLEX_VERSION)" | cut -d"." -f2)
-ifeq ($(shell test $(HOST_FLEX_MAJOR) -lt 3; echo $$?),0)
-ifeq ($(shell test $(HOST_FLEX_MINOR) -lt 5; echo $$?),0)
+# The maketokenizer perl script has been patched to work with flex >= 2.5
 BUILDOWB := yes
-endif
-endif
- 
+
 %build_prog mmake=contrib-networking-apps-startowb \
     files="startowb locale" targetdir=$(EXEDIR) \
-    progname="startowb" uselibs="fontconfig xml2 freetype2.static z iconv pthread"
+    progname="startowb" uselibs="fontconfig xml2 freetype2.static z iconv pthread png lzma"
 
 FILES :=               \
 	tabs/tab           \
@@ -41,16 +31,18 @@ FILES :=               \
 	bookmarkmanager    \
 	browserwindow      \
 	browserapp
-	
+
 #MM- contrib-networking-apps: contrib-networking-apps-owb-$(BUILDOWB)
 #MM- contrib-networking-apps-owb-yes : contrib-networking-apps-owb
 
-#MM- contrib-networking-apps-startowb : contrib-fontconfig
+#MM- contrib-networking-apps-startowb : contrib-fontconfig contrib-networking-apps-owb-catalogs
 
 #MM- contrib-networking-apps-owb : workbench-libs-jpeg-linklib   \
 #MM                        workbench-libs-png-linklib    \
 #MM                        workbench-libs-thread         \
-#MM                        contrib-networking-apps-owb-webview   \
+#MM                        workbench-libs-zstd-library-linklib \
+#MM                        workbench-libs-lzma-library-linklib \
+#MM                        contrib-zune-classes-webkitty         \
 #MM                        contrib-networking-apps-owb-icon      \
 #MM                        contrib-networking-apps-owb-catalogs  \
 #MM                        contrib-networking-apps-owb-resources \
@@ -59,7 +51,8 @@ FILES :=               \
 #MM                        contrib-networking-apps-startowb      \
 #MM                        contrib-networking-apps-owb-quick
 
-#MM contrib-networking-apps-owb-resources : contrib-networking-apps-owb-icons iconset-$(AROS_TARGET_ICONSET)-contrib-icons-owb contrib-networking-apps-owb-readme
+#MM contrib-networking-apps-owb-resources : contrib-networking-apps-owb-icons iconset-$(AROS_TARGET_ICONSET)-contrib-icons-owb contrib-networking-apps-owb-readme \
+#MM     contrib-networking-apps-owb-icudata
 
 I18N_LIBS=
 # ifneq ($(AROS_TARGET_CPU),arm)
@@ -73,13 +66,12 @@ I18N_LIBS=
 
 #TODO: Link OWB with shared library version of freetype2
 
-USER_CFLAGS := -DZUNE_BUILTIN_SCROLLGROUP=0 -DMUIMASTER_YES_INLINE_STDARG \
-    -DWTF_PLATFORM_AROS=1
-USER_INCLUDES := -I$(SRCDIR)/$(CURDIR)/tabs -I$(AROS_INCLUDES)/SDL \
-    -I$(AROS_INCLUDES)/webkit-owb -I$(AROS_CONTRIB_INCLUDES)
+USER_CFLAGS := -DZUNE_BUILTIN_SCROLLGROUP=0 -DMUIMASTER_YES_INLINE_STDARG
+USER_INCLUDES := -I$(SRCDIR)/$(CURDIR)/tabs -I$(AROS_INCLUDES)/webkitty -I$(AROS_CONTRIB_INCLUDES)
 
+# The engine is the webkitty Zune class (contrib/workbench/classes/mui/webkitty).
 %build_prog mmake=contrib-networking-apps-owb progname=owb targetdir=$(EXEDIR) \
-            files="$(FILES)" uselibs="webkit-owb webcore wtf jsc webkit-owb $(I18N_LIBS) codesets thread xml2 fontconfig freetype2.static SDL SDL_gfx GL png jpeg curl iconv z mui ssl crypto sqlite3 xslt thread stdc++ pthread"
+            files="$(FILES)" uselibs="webkitty codesets" alwayscxxlink=yes nix=yes
 
 ICONS := back.png close.png download.png find.png forward.png go.png home.png preferences.png reload.png search.png stop.png bookmarks.png logo.png
 
@@ -88,7 +80,10 @@ ICONS := back.png close.png download.png find.png forward.png go.png home.png pr
 %copy_files_q mmake=contrib-networking-apps-owb-readme files="README" dst="$(EXEDIR)/"
 
 %copy_dir_recursive src="fonts" dst="$(EXEDIR)/fonts" mmake=contrib-networking-apps-owb-fonts
-%copy_dir_recursive src="$(AROS_DEVELOPER)/share/webkit-owb/resources" dst="$(EXEDIR)/resources" mmake=contrib-networking-apps-owb-resources
 %copy_dir_recursive src="licenses" dst="$(EXEDIR)/licenses" mmake=contrib-networking-apps-owb-licenses
+
+# ICU data files, read by the engine from PROGDIR:Resources
+#MM- contrib-networking-apps-owb-icudata : contrib-icu4c
+%copy_dir_recursive src="$(AROS_DEVELOPER)/share/icu/data" dst="$(EXEDIR)/resources" mmake=contrib-networking-apps-owb-icudata
 
 %common

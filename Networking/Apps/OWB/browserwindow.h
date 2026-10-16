@@ -22,6 +22,7 @@
 #define MUIA_BrowserWindow_ShowLocationBar (MUIB_BrowserWindow  | 0x00000006)
 #define MUIA_BrowserWindow_ShowScrollbars  (MUIB_BrowserWindow  | 0x00000007)
 #define MUIA_BrowserWindow_WebViewPointer  (MUIB_BrowserWindow  | 0x00000008)
+#define MUIA_BrowserWindow_Title           (MUIB_BrowserWindow  | 0x00000009) /* [S.] UTF-8 page title */
 
 /*** Public methods *********************************************************/
 #define MUIM_BrowserWindow_OpenURLInActiveTab (MUIB_BrowserWindow  | 0x00000000)
@@ -35,6 +36,8 @@ struct  MUIP_BrowserWindow_OpenNewTab {STACKED ULONG MethodID; STACKED ULONG mod
 #define MUIM_BrowserWindow_Zoom                (MUIB_BrowserWindow  | 0x00000006)
 struct  MUIP_BrowserWindow_Zoom    {STACKED ULONG MethodID; STACKED ULONG mode;};
 #define MUIM_BrowserWindow_ShowSource          (MUIB_BrowserWindow  | 0x00000007)
+#define MUIM_BrowserWindow_FullScreen          (MUIB_BrowserWindow  | 0x00000008)
+struct  MUIP_BrowserWindow_FullScreen {STACKED ULONG MethodID; STACKED ULONG on;};
 
 /*** Constants **************************************************************/
 #define MUIV_BrowserWindow_BackgroundTab       (MUIB_BrowserWindow  | 0x00000000)

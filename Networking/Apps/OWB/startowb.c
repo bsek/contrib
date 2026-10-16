@@ -1,5 +1,5 @@
 /*
-    Copyright © 2009-2011, The AROS Development Team. All rights reserved.
+    Copyright ï¿½ 2009-2011, The AROS Development Team. All rights reserved.
     $Id$
 */
 
@@ -62,7 +62,7 @@ int main(int argc, char** argv)
 
     Locale_Initialize();
 
-    SetVar("FONTCONFIG_PATH", "PROGDIR:fonts/config", -1, LV_VAR | GVF_LOCAL_ONLY);
+    SetVar("FONTCONFIG_FILE", "PROGDIR:fonts/config/fonts.conf", -1, LV_VAR | GVF_LOCAL_ONLY);
 
     // GUI creation
     app = ApplicationObject,

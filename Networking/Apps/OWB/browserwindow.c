@@ -1,5 +1,5 @@
 /*
-    Copyright © 2009, The AROS Development Team. All rights reserved.
+    Copyright ï¿½ 2009, The AROS Development Team. All rights reserved.
     $Id$
 */
 
@@ -32,6 +32,8 @@
 #include "tabbedview.h"
 
 #include <curl/curl.h>
+#include <stdio.h>
+#include <string.h>
 
 #include "browsertab.h"
 #include "searchbar.h"
@@ -45,7 +47,35 @@
 struct MUI_CustomClass *BrowserWindowClass;
 
 /* Evil global variables */
-struct Hook openNewHook, alertHook, confirmHook, promptHook, policyHook, credentialsHook, closeHook;
+struct Hook openNewHook, alertHook, confirmHook, promptHook, policyHook, credentialsHook, closeHook, tabTitleHook;
+
+/* The WebView's texts are UTF-8 but Zune shows the system's codeset, so
+   convert them; characters missing there get their closest ASCII (e.g. a
+   hyphen for an en dash). Free with CodesetsFreeA() */
+static STRPTR LocalString(CONST_STRPTR utf8)
+{
+    return utf8 ? CodesetsUTF8ToStr(CSA_Source, (IPTR) utf8, CSA_MapForeignChars, TRUE, TAG_END) : NULL;
+}
+
+static IPTR TabTitleFunc(struct Hook *hook, Object *tab, CONST_STRPTR *title)
+{
+    STRPTR local = LocalString(*title);
+    set(tab, MUIA_BrowserTab_Title, local ? local : *title);
+    if(local)
+        CodesetsFreeA(local, NULL);
+    return 0;
+}
+
+/* "Error: <reason>" for the status bar, or plain "Error" if there's no reason */
+static STRPTR ErrorStatus(struct BrowserWindow_DATA *data)
+{
+    STRPTR errorText = (STRPTR) XGET(data->tabbed, MUIA_WebView_ErrorText);
+
+    if(!errorText || errorText[0] == '\0')
+	return (STRPTR) _(MSG_Error);
+    snprintf(data->errorStatus, sizeof(data->errorStatus), "%s: %s", _(MSG_Error), errorText);
+    return data->errorStatus;
+}
 
 static IPTR OpenNewFunc(struct Hook *hook, Object *sender, void *data)
 {
@@ -75,7 +105,7 @@ static void WebSearchFunc(struct Hook *hook, Object *searchString, void *data)
 {
     UBYTE *buf = NULL;
     get(searchString, MUIA_String_Contents, &buf);
-    set(searchString, MUIA_String_Acknowledge, buf);    
+    set(searchString, MUIA_String_Acknowledge, buf);
 }
 
 static void WebSearchAcknowledgeFunc(struct Hook *hook, Object *searchString, char **search)
@@ -83,7 +113,7 @@ static void WebSearchAcknowledgeFunc(struct Hook *hook, Object *searchString, ch
     struct codeset *utfCodeset = CodesetsFindA("UTF-8", NULL);
     if(!utfCodeset)
 	return;
-    
+
     char *searchConverted = CodesetsConvertStr(CSA_Source, (IPTR) *search, CSA_DestCodeset, (IPTR) utfCodeset, TAG_END);
     if(searchConverted)
     {
@@ -107,19 +137,28 @@ static void WebSearchAcknowledgeFunc(struct Hook *hook, Object *searchString, ch
 
 static IPTR AlertFunc(struct Hook *hook, Object *webView, STRPTR *message)
 {
-    return MUI_Request(_app(webView), _win(webView), 0, _(MSG_JavaScript_Alert), _(MSG_JavaScript_AlertOK), "%s", (char*) *message);
+    STRPTR local = LocalString(*message);
+    IPTR ret = MUI_Request(_app(webView), _win(webView), 0, _(MSG_JavaScript_Alert), _(MSG_JavaScript_AlertOK), "%s", local ? (char*) local : (char*) *message);
+    if(local)
+        CodesetsFreeA(local, NULL);
+    return ret;
 }
 
 static IPTR ConfirmFunc(struct Hook *hook, Object *webView, STRPTR *message)
 {
-    return !MUI_Request(_app(webView), _win(webView), 0, _(MSG_JavaScript_Confirm), _(MSG_JavaScript_ConfirmOptions), "%s", (char*) *message);
+    STRPTR local = LocalString(*message);
+    IPTR ret = !MUI_Request(_app(webView), _win(webView), 0, _(MSG_JavaScript_Confirm), _(MSG_JavaScript_ConfirmOptions), "%s", local ? (char*) local : (char*) *message);
+    if(local)
+        CodesetsFreeA(local, NULL);
+    return ret;
 }
 
 static IPTR PromptFunc(struct Hook *hook, Object *webView, STRPTR **args)
 {
     Object *req_wnd, *bt_cancel, *bt_ok, *str;
     STRPTR answer = NULL;
-    
+    STRPTR message = LocalString((*args)[0]), initial = LocalString((*args)[1]);
+
     req_wnd = (Object*) WindowObject,
         MUIA_Window_Title, (IPTR) _(MSG_JavaScript_Prompt),
         MUIA_Window_RefWindow, (IPTR) _win(webView),
@@ -138,23 +177,29 @@ static IPTR PromptFunc(struct Hook *hook, Object *webView, STRPTR **args)
                     MUIA_InnerTop, 8,
                     MUIA_Background, MUII_TextBack,
                     MUIA_Text_SetMax, TRUE,
-                    MUIA_Text_Contents, (IPTR) (*args)[0],
+                    MUIA_Text_Contents, (IPTR) (message ? message : (*args)[0]),
                     End),
                 End),
             Child, (IPTR)(VSpace(2)),
             Child, (IPTR)(str = (Object*) StringObject,
                 MUIA_Frame, MUIV_Frame_String,
-                MUIA_String_Contents, (IPTR) (*args)[1],
+                MUIA_String_Contents, (IPTR) (initial ? initial : (*args)[1]),
                 End),
             Child, (IPTR)(VSpace(2)),
-            Child, (IPTR)(HGroup, 
+            Child, (IPTR)(HGroup,
                 Child, (IPTR)(bt_cancel = (Object*) SimpleButton(_(MSG_JavaScript_PromptCancel))),
                 Child, (IPTR)(HSpace(0)),
                 Child, (IPTR)(bt_ok = (Object*) SimpleButton(_(MSG_JavaScript_PromptOK))),
                 End),
             End),
         End;
-    
+
+    /* the text objects copied them */
+    if(message)
+        CodesetsFreeA(message, NULL);
+    if(initial)
+        CodesetsFreeA(initial, NULL);
+
     if (!req_wnd)
         return (IPTR) NULL;
 
@@ -174,7 +219,7 @@ static IPTR PromptFunc(struct Hook *hook, Object *webView, STRPTR **args)
     if (XGET(req_wnd, MUIA_Window_Open))
     {
         ULONG sigs = 0;
-        
+
         while (result == -1)
         {
             ULONG ret = DoMethod(_app(webView), MUIM_Application_NewInput, (IPTR)&sigs);
@@ -183,7 +228,7 @@ static IPTR PromptFunc(struct Hook *hook, Object *webView, STRPTR **args)
                 result = ret;
                 break;
             }
-            
+
             if (sigs)
                 sigs = Wait(sigs);
         }
@@ -192,14 +237,19 @@ static IPTR PromptFunc(struct Hook *hook, Object *webView, STRPTR **args)
     if (result == 2)
     {
         STRPTR value = (STRPTR) XGET(str, MUIA_String_Contents);
-        if(value)
-            answer = StrDup(value);
+        /* the WebView takes the answer as UTF-8 and FreeVec()s it */
+        UTF8 *utf8 = value ? CodesetsUTF8Create(CSA_Source, (IPTR) value, TAG_END) : NULL;
+        if(utf8)
+        {
+            answer = StrDup((STRPTR) utf8);
+            CodesetsFreeA(utf8, NULL);
+        }
     }
 
     set(req_wnd, MUIA_Window_Open, FALSE);
     DoMethod(_app(webView), OM_REMMEMBER, (IPTR)req_wnd);
     MUI_DisposeObject(req_wnd);
-    
+
     return (IPTR) answer;
 }
 
@@ -226,9 +276,9 @@ static IPTR CredentialsFunc(struct Hook *hook, Object *webView, IPTR **args)
     CONST_STRPTR *password = (CONST_STRPTR*) (*args)[3];
     BOOL ret = FALSE;
     char msg[1024];
-    
+
     snprintf(msg, sizeof(msg), _(MSG_RequestCredentials_Message), realm, hostname);
-    
+
     req_wnd = (Object*) WindowObject,
         MUIA_Window_Title, (IPTR) _(MSG_RequestCredentials_Title),
         MUIA_Window_RefWindow, (IPTR) _win(webView),
@@ -265,14 +315,14 @@ static IPTR CredentialsFunc(struct Hook *hook, Object *webView, IPTR **args)
 		    End),
 		End),
             Child, (IPTR)(VSpace(2)),
-            Child, (IPTR)(HGroup, 
+            Child, (IPTR)(HGroup,
                 Child, (IPTR)(bt_cancel = (Object*) SimpleButton(_(MSG_RequestCredentials_Cancel))),
                 Child, (IPTR)(HSpace(0)),
                 Child, (IPTR)(bt_ok = (Object*) SimpleButton(_(MSG_RequestCredentials_OK))),
                 End),
             End),
         End;
-    
+
     if (!req_wnd)
         return (IPTR) NULL;
 
@@ -292,7 +342,7 @@ static IPTR CredentialsFunc(struct Hook *hook, Object *webView, IPTR **args)
     if (XGET(req_wnd, MUIA_Window_Open))
     {
         ULONG sigs = 0;
-        
+
         while (result == -1)
         {
             ULONG ret = DoMethod(_app(webView), MUIM_Application_NewInput, (IPTR)&sigs);
@@ -301,7 +351,7 @@ static IPTR CredentialsFunc(struct Hook *hook, Object *webView, IPTR **args)
                 result = ret;
                 break;
             }
-            
+
             if (sigs)
                 sigs = Wait(sigs);
         }
@@ -317,7 +367,7 @@ static IPTR CredentialsFunc(struct Hook *hook, Object *webView, IPTR **args)
     set(req_wnd, MUIA_Window_Open, FALSE);
     DoMethod(_app(webView), OM_REMMEMBER, (IPTR)req_wnd);
     MUI_DisposeObject(req_wnd);
-    
+
     return (IPTR) ret;
 }
 
@@ -329,12 +379,13 @@ static IPTR CloseFunc(struct Hook *hook, Object *webView, APTR *arg)
 /*** Methods ****************************************************************/
 IPTR BrowserWindow__OM_NEW(Class *CLASS, Object *self, struct opSet *message)
 {
-    struct BrowserWindow_DATA *data = NULL; 
+    struct BrowserWindow_DATA *data = NULL;
     struct TagItem *tag = NULL, *tstate = message->ops_AttrList;
- 
+
     Object *webView, *tab, *tabs, *tabbed;
     Object *toolTips, *progressBar, *urlString;
     Object *bt_back, *bt_forward, *bt_search, *bt_go, *bt_download, *bt_preferences, *bt_find, *bt_reload, *bt_stop, *bt_bookmarks;
+    Object *topBar, *bottomBar;
     Object *searchCriteria, *searchBar;
     Object *bt_close, *menuclosetab, *menunewtab, *menubookmarktab, *tabContextMenu;
     BOOL showStatusBar = TRUE;
@@ -342,7 +393,7 @@ IPTR BrowserWindow__OM_NEW(Class *CLASS, Object *self, struct opSet *message)
     BOOL showLocationBar = TRUE;
     BOOL showScrollbars = TRUE;
     Object **webViewPointer = NULL;
-    
+
     openNewHook.h_Entry = HookEntry;
     openNewHook.h_SubEntry = (HOOKFUNC) OpenNewFunc;
     alertHook.h_Entry = HookEntry;
@@ -357,7 +408,9 @@ IPTR BrowserWindow__OM_NEW(Class *CLASS, Object *self, struct opSet *message)
     credentialsHook.h_SubEntry = (HOOKFUNC) CredentialsFunc;
     closeHook.h_Entry = HookEntry;
     closeHook.h_SubEntry = (HOOKFUNC) CloseFunc;
-    
+    tabTitleHook.h_Entry = HookEntry;
+    tabTitleHook.h_SubEntry = (HOOKFUNC) TabTitleFunc;
+
     /* Parse initial attributes --------------------------------------------*/
     while ((tag = NextTagItem(&tstate)) != NULL)
     {
@@ -380,18 +433,18 @@ IPTR BrowserWindow__OM_NEW(Class *CLASS, Object *self, struct opSet *message)
             default:
                 continue; /* Don't supress non-processed tags */
         }
-        
+
         tag->ti_Tag = TAG_IGNORE;
     }
 
     (void)showScrollbars; /* unused */
-    
+
     self = (Object *) DoSuperNewTags
     (
         CLASS, self, NULL,
 	MUIA_Window_Title, (IPTR)_(MSG_OWB),
 	WindowContents, (IPTR)(VGroup,
-	    Child, (IPTR)(HGroup,
+	    Child, (IPTR)(topBar = HGroup,
 		MUIA_ShowMe, showToolBar || showLocationBar,
 	        Child, (IPTR)(HGroup,
 		    MUIA_ShowMe, showToolBar,
@@ -498,7 +551,8 @@ IPTR BrowserWindow__OM_NEW(Class *CLASS, Object *self, struct opSet *message)
 		    MUIA_InnerLeft, 5,
 		    MUIA_InnerRight, 5,
 		    MUIA_InnerBottom, 5,
-		    Child, (IPTR)(webView = NewObject(WebView_CLASS->mcc_Class, NULL, 
+		    Child, (IPTR)(webView = NewObject(WebView_CLASS->mcc_Class, NULL,
+			MUIA_WebView_DrawScrollbars, TRUE,
 			MUIA_WebView_CreateNewHook, (IPTR)&openNewHook,
 			MUIA_WebView_AlertHook, (IPTR)&alertHook,
 			MUIA_WebView_ConfirmHook, (IPTR)&confirmHook,
@@ -509,9 +563,9 @@ IPTR BrowserWindow__OM_NEW(Class *CLASS, Object *self, struct opSet *message)
 			TAG_END)),
 		    TAG_END)),
 		End),
-	    Child, (IPTR)(searchBar = NewObject(SearchBar_CLASS->mcc_Class, NULL, 
+	    Child, (IPTR)(searchBar = NewObject(SearchBar_CLASS->mcc_Class, NULL,
 		TAG_END)),
-	    Child, (IPTR)(HGroup,
+	    Child, (IPTR)(bottomBar = HGroup,
 		MUIA_ShowMe, showToolBar || showStatusBar,
 		Child, (IPTR)(HGroup,
 	            MUIA_ShowMe, showToolBar,
@@ -558,15 +612,15 @@ IPTR BrowserWindow__OM_NEW(Class *CLASS, Object *self, struct opSet *message)
 		    End),
 		End),
 	   End),
-        TAG_MORE, (IPTR) message->ops_AttrList	
+        TAG_MORE, (IPTR) message->ops_AttrList
     );
-    
+
     if (self == NULL)
 	return (IPTR) NULL;
 
     if(webViewPointer)
 	*webViewPointer = webView;
-    
+
     data = INST_DATA(CLASS, self);
     data->tabs = tabs;
     data->tabbed = tabbed;
@@ -574,6 +628,8 @@ IPTR BrowserWindow__OM_NEW(Class *CLASS, Object *self, struct opSet *message)
     data->tabContextMenu = tabContextMenu;
     data->progressBar = progressBar;
     data->searchBar = searchBar;
+    data->topBar = topBar;
+    data->bottomBar = bottomBar;
     data->toolTips = toolTips;
     data->goHook.h_Entry = HookEntry;
     data->goHook.h_SubEntry = (HOOKFUNC) GoFunc;
@@ -581,7 +637,7 @@ IPTR BrowserWindow__OM_NEW(Class *CLASS, Object *self, struct opSet *message)
     data->webSearchHook.h_SubEntry = (HOOKFUNC) WebSearchFunc;
     data->webSearchAcknowledgeHook.h_Entry = HookEntry;
     data->webSearchAcknowledgeHook.h_SubEntry = (HOOKFUNC) WebSearchAcknowledgeFunc;
-    
+
     /* Click Close gadget or hit Escape to quit */
     DoMethod(self, MUIM_Notify, MUIA_Window_CloseRequest, TRUE,
 	    (IPTR) MUIV_Notify_Application, 2,
@@ -648,7 +704,7 @@ IPTR BrowserWindow__OM_NEW(Class *CLASS, Object *self, struct opSet *message)
     /* Text Search window */
     DoMethod(bt_find, MUIM_Notify, MUIA_Selected, FALSE,
 	     (IPTR) searchBar, 3,
-	     MUIM_Set, MUIA_ShowMe, TRUE); 
+	     MUIM_Set, MUIA_ShowMe, TRUE);
 
     /* Preferences */
     DoMethod(bt_preferences, MUIM_Notify, MUIA_Selected, FALSE,
@@ -663,7 +719,7 @@ IPTR BrowserWindow__OM_NEW(Class *CLASS, Object *self, struct opSet *message)
     /* Connect initial webView title with the tab title */
     DoMethod(webView, MUIM_Notify, MUIA_WebView_Title, MUIV_EveryTime,
 	     (IPTR) tab, 3,
-	     MUIM_Set, MUIA_BrowserTab_Title, MUIV_TriggerValue);
+	     MUIM_CallHook, (IPTR) &tabTitleHook, MUIV_TriggerValue);
 
     /* Go back */
     DoMethod(bt_back, MUIM_Notify, MUIA_Pressed, FALSE,
@@ -729,11 +785,16 @@ IPTR BrowserWindow__OM_NEW(Class *CLASS, Object *self, struct opSet *message)
     DoMethod(tabbed, MUIM_Notify, MUIA_WebView_URL, MUIV_EveryTime,
 	     (IPTR) urlString, 3,
 	     MUIM_Set, MUIA_String_Contents, MUIV_TriggerValue);
-    
+
     /* Update title */
     DoMethod(tabbed, MUIM_Notify, MUIA_WebView_Title, MUIV_EveryTime,
 	     (IPTR) self, 3,
-	     MUIM_Set, MUIA_Window_Title, MUIV_TriggerValue);
+	     MUIM_Set, MUIA_BrowserWindow_Title, MUIV_TriggerValue);
+
+    /* A page element (e.g. a video) went full screen or left it */
+    DoMethod(tabbed, MUIM_Notify, MUIA_WebView_FullScreen, MUIV_EveryTime,
+	     (IPTR) self, 2,
+	     MUIM_BrowserWindow_FullScreen, MUIV_TriggerValue);
 
     /* Update back button state */
     DoMethod(tabbed, MUIM_Notify, MUIA_WebView_CanGoBack, MUIV_EveryTime,
@@ -749,7 +810,7 @@ IPTR BrowserWindow__OM_NEW(Class *CLASS, Object *self, struct opSet *message)
     DoMethod(self, MUIM_Notify, MUIA_Window_InputEvent, "control n",
 	    (IPTR) MUIV_Notify_Application, 2,
 	    MUIM_BrowserApp_OpenNewWindow, NULL);
-    
+
     /* Back and forward buttons are disabled by default */
     set(bt_back, MUIA_Disabled, TRUE);
     set(bt_forward, MUIA_Disabled, TRUE);
@@ -767,6 +828,8 @@ IPTR BrowserWindow__OM_DISPOSE(Class *CLASS, Object *self, Msg message)
     IPTR ret;
     ret = DoSuperMethodA(CLASS, self, message);
     MUI_DisposeObject(data->tabContextMenu);
+    if(data->title)
+        CodesetsFreeA(data->title, NULL);
 
     return ret;
 }
@@ -776,7 +839,7 @@ IPTR BrowserWindow__OM_SET(Class *cl, Object *obj, struct opSet *msg)
     struct BrowserWindow_DATA *data = INST_DATA(cl, obj);
     struct TagItem *tags  = msg->ops_AttrList;
     struct TagItem *tag;
-    
+
     while ((tag = NextTagItem(&tags)) != NULL)
     {
     	switch(tag->ti_Tag)
@@ -784,13 +847,23 @@ IPTR BrowserWindow__OM_SET(Class *cl, Object *obj, struct opSet *msg)
     	    case MUIA_BrowserWindow_LoadingProgress:
     	    {
 		LONG value = tag->ti_Data;
-		
+
 		/* Display progress information only when loading */
 		if(XGET(data->tabbed, MUIA_WebView_State) != MUIV_WebView_State_Loading)
 		    value = 0;
 
 		set(data->progressBar, MUIA_Gauge_Current, value);
     		break;
+    	    }
+    	    case MUIA_BrowserWindow_Title:
+    	    {
+		/* the window keeps the pointer: free the old title after */
+		STRPTR title = LocalString((CONST_STRPTR) tag->ti_Data);
+		set(obj, MUIA_Window_Title, title ? title : (STRPTR) tag->ti_Data);
+		if(data->title)
+		    CodesetsFreeA(data->title, NULL);
+		data->title = title;
+		break;
     	    }
     	    case MUIA_BrowserWindow_Status:
     	    {
@@ -810,7 +883,7 @@ IPTR BrowserWindow__OM_SET(Class *cl, Object *obj, struct opSet *msg)
 			    value = (STRPTR) _(MSG_Loading);
 			    break;
 			case MUIV_WebView_State_Error:
-			    value = (STRPTR) _(MSG_Error);
+			    value = ErrorStatus(data);
 			    break;
 		    }
 		}
@@ -835,7 +908,7 @@ IPTR BrowserWindow__OM_SET(Class *cl, Object *obj, struct opSet *msg)
 			    status = (STRPTR) _(MSG_Loading);
 			    break;
 			case MUIV_WebView_State_Error:
-			    status = (STRPTR) _(MSG_Error);
+			    status = ErrorStatus(data);
 			    break;
 		    }
     		}
@@ -846,7 +919,7 @@ IPTR BrowserWindow__OM_SET(Class *cl, Object *obj, struct opSet *msg)
     		continue;
 	}
     }
-    
+
     return DoSuperMethodA(cl, obj, (Msg)msg);
 }
 
@@ -854,7 +927,7 @@ IPTR BrowserWindow__OM_GET(Class *cl, Object *obj, struct opGet *msg)
 {
     struct BrowserWindow_DATA *data = INST_DATA(cl, obj);
     IPTR retval = TRUE;
-    
+
     switch(msg->opg_AttrID)
     {
         case MUIA_BrowserWindow_WebView:
@@ -864,21 +937,27 @@ IPTR BrowserWindow__OM_GET(Class *cl, Object *obj, struct opGet *msg)
 	    retval = DoSuperMethodA(cl, obj, (Msg)msg);
 	    break;
     }
-    
+
     return retval;
 }
 
 IPTR BrowserWindow__MUIM_BrowserWindow_OpenURLInActiveTab(Class *cl, Object *obj, struct MUIP_BrowserWindow_OpenURLInActiveTab *msg)
 {
     struct BrowserWindow_DATA *data = INST_DATA(cl, obj);
-    
-    set(data->urlString, MUIA_String_Contents, msg->url);
-    
-    char *buf = msg->url;
+
+    /* msg->url may point into data->urlString's own contents buffer; copy it
+       before set(MUIA_String_Contents) frees/reallocs that buffer, otherwise
+       buf below dangles and the address field shows garbage. */
+    char *buf = msg->url ? StrDup(msg->url) : NULL;
+    if(!buf)
+        return 0;
+
+    set(data->urlString, MUIA_String_Contents, buf);
+
     const char *httpPrefix = "http://";
-    
+
     set(data->tabbed, MUIA_WebView_Active, TRUE);
-    
+
     if(!strstr(buf, "://"))
     {
 	/* No protocol is specified, assume it's http */
@@ -894,23 +973,25 @@ IPTR BrowserWindow__MUIM_BrowserWindow_OpenURLInActiveTab(Class *cl, Object *obj
     else
         DoMethod(data->tabbed, MUIM_WebView_LoadURL, buf);
 
+    FreeVec(buf);
     return 0;
 }
 
 IPTR BrowserWindow__MUIM_BrowserWindow_OpenNewTab(Class *cl, Object *obj, struct MUIP_BrowserWindow_OpenNewTab *msg)
 {
     struct BrowserWindow_DATA *data = INST_DATA(cl, obj);
-    
+
     Object *newTab = NULL, *newWebView = NULL;
 
     DoMethod(data->tabs, MUIM_Group_InitChange);
     DoMethod(data->tabs, OM_ADDMEMBER, newTab = NewObject(BrowserTab_CLASS->mcc_Class, NULL, TAG_END));
     DoMethod(data->tabs, MUIM_Group_ExitChange);
-    
+
     DoMethod(data->tabbed, MUIM_Group_InitChange);
     DoMethod(data->tabbed, OM_ADDMEMBER, newWebView = NewObject(
-	    WebView_CLASS->mcc_Class, NULL, 
-	    MUIA_WebView_CreateNewHook, &openNewHook, 
+	    WebView_CLASS->mcc_Class, NULL,
+	    MUIA_WebView_DrawScrollbars, TRUE,
+	    MUIA_WebView_CreateNewHook, &openNewHook,
 	    MUIA_WebView_AlertHook, &alertHook,
 	    MUIA_WebView_ConfirmHook, &confirmHook,
 	    MUIA_WebView_PromptHook, &promptHook,
@@ -922,8 +1003,8 @@ IPTR BrowserWindow__MUIM_BrowserWindow_OpenNewTab(Class *cl, Object *obj, struct
 
     DoMethod(newWebView, MUIM_Notify, MUIA_WebView_Title, MUIV_EveryTime,
 	     (IPTR) newTab, 3,
-	     MUIM_Set, MUIA_BrowserTab_Title, MUIV_TriggerValue);
-    
+	     MUIM_CallHook, (IPTR) &tabTitleHook, MUIV_TriggerValue);
+
     if(msg->mode == MUIV_BrowserWindow_ForegroundTab)
     {
 	struct List *children = (struct List*) XGET(data->tabbed, MUIA_Group_ChildList);
@@ -932,17 +1013,17 @@ IPTR BrowserWindow__MUIM_BrowserWindow_OpenNewTab(Class *cl, Object *obj, struct
 	set(data->tabs, MUIA_Tabs_ActiveTab, childNum - 1);
 	DoMethod(_app(obj), MUIM_Application_PushMethod, obj, 3, MUIM_Set, MUIA_Window_ActiveObject, data->urlString);
     }
-    
+
     return (IPTR) newWebView;
 }
 
 IPTR BrowserWindow__MUIM_BrowserWindow_CloseActiveTab(Class *cl, Object *obj, Msg msg)
 {
     struct BrowserWindow_DATA *data = INST_DATA(cl, obj);
-        
+
     Object *deletedWebView = (Object*) XGET(data->tabbed, MUIA_TabbedView_ActiveObject);
 
-    DoMethod(deletedWebView, MUIM_KillNotify, MUIA_WebView_Title);    
+    DoMethod(deletedWebView, MUIM_KillNotify, MUIA_WebView_Title);
 
     DoMethod(data->tabbed, MUIM_Group_InitChange);
     DoMethod(data->tabbed, OM_REMMEMBER, (IPTR) deletedWebView);
@@ -959,7 +1040,7 @@ IPTR BrowserWindow__MUIM_BrowserWindow_CloseActiveTab(Class *cl, Object *obj, Ms
         DoMethod(data->tabbed, MUIM_Group_InitChange);
         DoMethod(data->tabbed, OM_ADDMEMBER, (IPTR) deletedWebView);
         DoMethod(data->tabbed, MUIM_Group_ExitChange);
-        
+
 	DoMethod(_app(obj), MUIM_Application_PushMethod, _app(obj), 2, MUIM_BrowserApp_CloseWindow, obj);
 	return 0;
     }
@@ -967,14 +1048,14 @@ IPTR BrowserWindow__MUIM_BrowserWindow_CloseActiveTab(Class *cl, Object *obj, Ms
     /* Destroy the closed tab */
     MUI_DisposeObject(deletedTab);
     MUI_DisposeObject(deletedWebView);
-    
+
     return 0;
 }
 
 IPTR BrowserWindow__MUIM_BrowserWindow_Bookmark(struct IClass *cl, Object *obj, Msg msg)
 {
     struct BrowserWindow_DATA *data = (struct BrowserWindow_DATA *) INST_DATA(cl, obj);
-    
+
     Object *webView = (Object*) XGET(data->tabbed, MUIA_TabbedView_ActiveObject);
     Object *tab = (Object*) XGET(data->tabs, MUIA_Tabs_ActiveTabObject);
     STRPTR title = (STRPTR) XGET(tab, MUIA_BrowserTab_Title);
@@ -1045,6 +1126,31 @@ IPTR BrowserWindow__MUIM_BrowserWindow_ShowSource(struct IClass *cl, Object *obj
 }
 
 /*** Setup ******************************************************************/
+/* Hide the bars around the page while an element fills it, restore them after */
+IPTR BrowserWindow__MUIM_BrowserWindow_FullScreen(Class *CLASS, Object *self, struct MUIP_BrowserWindow_FullScreen *message)
+{
+    struct BrowserWindow_DATA *data = (struct BrowserWindow_DATA *) INST_DATA(CLASS, self);
+    Object *bars[4] = { data->topBar, data->tabs, data->searchBar, data->bottomBar };
+    BOOL on = message->on ? TRUE : FALSE;
+    int i;
+
+    if (on == data->fullScreen)
+	return TRUE;
+    data->fullScreen = on;
+
+    for (i = 0; i < 4; i++)
+    {
+	if (on)
+	{
+	    data->barShown[i] = XGET(bars[i], MUIA_ShowMe) ? TRUE : FALSE;
+	    set(bars[i], MUIA_ShowMe, FALSE);
+	}
+	else
+	    set(bars[i], MUIA_ShowMe, data->barShown[i]);
+    }
+    return TRUE;
+}
+
 __ZUNE_CUSTOMCLASS_START(BrowserWindow)
 __ZUNE_CUSTOMCLASS_METHOD(BrowserWindow__OM_NEW, OM_NEW, struct opSet*);
 __ZUNE_CUSTOMCLASS_METHOD(BrowserWindow__OM_DISPOSE, OM_DISPOSE, Msg);
@@ -1058,4 +1164,5 @@ __ZUNE_CUSTOMCLASS_METHOD(BrowserWindow__MUIM_BrowserWindow_Find, MUIM_BrowserWi
 __ZUNE_CUSTOMCLASS_METHOD(BrowserWindow__MUIM_BrowserWindow_FindNext, MUIM_BrowserWindow_FindNext, Msg);
 __ZUNE_CUSTOMCLASS_METHOD(BrowserWindow__MUIM_BrowserWindow_Zoom, MUIM_BrowserWindow_Zoom, struct MUIP_BrowserWindow_Zoom*);
 __ZUNE_CUSTOMCLASS_METHOD(BrowserWindow__MUIM_BrowserWindow_ShowSource, MUIM_BrowserWindow_ShowSource, Msg);
+__ZUNE_CUSTOMCLASS_METHOD(BrowserWindow__MUIM_BrowserWindow_FullScreen, MUIM_BrowserWindow_FullScreen, struct MUIP_BrowserWindow_FullScreen*);
 __ZUNE_CUSTOMCLASS_END(BrowserWindow, NULL, MUIC_Window, NULL)

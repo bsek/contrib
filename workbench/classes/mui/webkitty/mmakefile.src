@@ -1,0 +1,71 @@
+# Copyright (C) 2026, The AROS Development Team. All rights reserved.
+
+include $(SRCDIR)/config/aros-contrib.cfg
+
+# webkitty (jacadcaps/webkitty, MorphOS's WebKit 2.52 port) built as static
+# libraries, with the Zune WebView class (WebViewZune.cpp, kept here) compiled
+# into the WebKitLegacy library. Applications link -lwebkitty (a linker script
+# grouping all libraries) and need nix=yes. The build needs ruby, perl,
+# python3 and gperf on the host.
+
+WEBKITTY_COMMIT := 92a028771447e78f68a1586070fd4f3d36b3a6c6
+ARCHBASE := $(WEBKITTY_COMMIT)
+WEBKITTY_SRCSUBDIR := webkitty-$(WEBKITTY_COMMIT)
+WEBKITTY_SOURCE := $(PORTSDIR)/webkitty/$(WEBKITTY_SRCSUBDIR)
+WEBKITTY_BUILDDIR := $(GENDIR)/$(CURDIR)
+REPOSITORIES := https://github.com/jacadcaps/webkitty/archive
+
+# MORPHOS_MINIMAL must be numeric: it also reaches the C++ code as a define.
+WEBKITTY_OPTIONS := \
+    -DCMAKE_MODULE_PATH=$(WEBKITTY_SOURCE)/Source/cmake \
+    -DCMAKE_SYSTEM_PREFIX_PATH=/ \
+    -DPORT=MorphOS \
+    -DMORPHOS_MINIMAL=1 \
+    -DENABLE_WEBCORE=ON \
+    -DENABLE_WEBKIT_LEGACY=ON \
+    -DUSE_CXX_STDLIB_ASSERTIONS=OFF \
+    -DWEBKITTY_ZUNE_DIR=$(SRCDIR)/$(CURDIR) \
+    -DFREETYPE_INCLUDE_DIR_ft2build=$(AROS_INCLUDES) \
+    -DFREETYPE_INCLUDE_DIR_freetype2=$(AROS_INCLUDES) \
+    -DFREETYPE_LIBRARY_RELEASE=$(AROS_LIB)/libfreetype2.static.a
+
+#MM contrib-zune-classes-webkitty : contrib-zune-classes-webkitty-build
+
+#MM contrib-zune-classes-webkitty-build : includes linklibs \
+#MM     contrib-icu4c contrib-harfbuzz contrib-cairo contrib-gfx-libs-pixman \
+#MM     contrib-fontconfig workbench-libs-freetype-complete workbench-libs-jpeg \
+#MM     workbench-libs-png-linklib contrib-libxslt contrib-sqlite contrib-libpsl \
+#MM     contrib-curl contrib-openssl contrib-ffmpeg linklibs-webp contrib-woff2 external-openurl-lib linklibs-pthread \
+#MM     contrib-zune-classes-webkitty-fetch
+
+%fetch mmake=contrib-zune-classes-webkitty-fetch archive=$(ARCHBASE) \
+    destination=$(PORTSDIR)/webkitty location=$(PORTSSOURCEDIR) \
+    archive_origins=$(REPOSITORIES) suffixes="tar.gz" \
+    patches_specs=webkitty-2.52.0-aros.diff:$(WEBKITTY_SRCSUBDIR):-f,-p1
+
+%create_patch mmake=contrib-zune-classes-webkitty-create-patch \
+    archive=$(ARCHBASE) srcdir=$(WEBKITTY_SRCSUBDIR) suffixes="tar.gz" \
+    destination=$(PORTSDIR)/webkitty excludes="*.orig __pycache__"
+
+%build_with_cmake mmake=contrib-zune-classes-webkitty-build \
+    srcdir=$(WEBKITTY_SOURCE) prefix="$(AROS_DEVELOPER)" \
+    extraoptions="$(WEBKITTY_OPTIONS)"
+
+# No install rules upstream: install the libraries under webkitty- names,
+# the linker script and the class header.
+WEBKITTY_LIBS := \
+    libWebKit.a:webkitlegacy \
+    libWebCore.a:webcore \
+    libPAL.a:pal \
+    libJavaScriptCore.a:javascriptcore \
+    libWTF.a:wtf
+
+#MM
+contrib-zune-classes-webkitty :
+	$(Q)$(MKDIR) $(AROS_INCLUDES)/webkitty
+	$(Q)$(CP) $(SRCDIR)/$(CURDIR)/WebViewZune.h $(SRCDIR)/$(CURDIR)/WebPreferencesZune.h \
+	    $(SRCDIR)/$(CURDIR)/DownloadDelegateZune.h $(AROS_INCLUDES)/webkitty/
+	$(Q)$(foreach l,$(WEBKITTY_LIBS),$(CP) $(WEBKITTY_BUILDDIR)/lib/$(word 1,$(subst :, ,$(l))) $(AROS_LIB)/libwebkitty-$(word 2,$(subst :, ,$(l))).a &&) true
+	$(Q)$(CP) $(SRCDIR)/$(CURDIR)/libwebkitty.ld $(AROS_LIB)/libwebkitty.a
+
+%common

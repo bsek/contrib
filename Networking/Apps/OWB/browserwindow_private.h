@@ -19,9 +19,14 @@ struct BrowserWindow_DATA
     Object *progressBar;
     Object *toolTips;
     Object *searchBar;
+    Object *topBar, *bottomBar;
+    BOOL fullScreen;
+    BOOL barShown[4];       /* bars' MUIA_ShowMe before going full screen */
     struct Hook goHook;
     struct Hook webSearchHook;
     struct Hook webSearchAcknowledgeHook;
+    char errorStatus[256];
+    STRPTR title;           /* window title in the system codeset */
 };
 
 #endif /* _BROWSERWINDOW_PRIVATE_H_ */
