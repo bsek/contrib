@@ -18,9 +18,8 @@
 
 #include <WebViewZune.h>
 
-#include <WebViewZune.h>
-
 #include "locale.h"
+void owb_crash_install(void);
 #include "browserapp.h"
 #include "browserwindow.h"
 
@@ -44,6 +43,16 @@ int main(void)
 	}
 	FreeArgs(args);
     }
+
+    /* Never block on an "insert volume" requester: the engine's libraries
+       (OpenSSL, libxml2, fontconfig) probe Unix paths such as /dev/urandom,
+       which name volumes that do not exist. Such probes must just fail.
+       WebKit's threads inherit this; the Shell's own value comes back at exit. */
+    struct Process *me = (struct Process *)FindTask(NULL);
+    APTR oldWindowPtr = me->pr_WindowPtr;
+    me->pr_WindowPtr = (APTR)-1;
+
+    owb_crash_install();
 
     Locale_Initialize();
     
@@ -90,6 +99,8 @@ int main(void)
     WebView_Terminate();
 
     Locale_Deinitialize();
+
+    me->pr_WindowPtr = oldWindowPtr;
     
     if(url)
 	FreeVec(url);

@@ -3,6 +3,7 @@
     $Id$
 */
 
+#include <stdio.h>
 #include <exec/types.h>
 #include <libraries/mui.h>
 #include <dos/var.h>
@@ -60,6 +61,12 @@ int main(int argc, char** argv)
         FreeArgs(args);
     }
 
+    /* No "insert volume" requesters from library path probes; the browser
+       process inherits this. */
+    struct Process *me = (struct Process *)FindTask(NULL);
+    APTR oldWindowPtr = me->pr_WindowPtr;
+    me->pr_WindowPtr = (APTR)-1;
+
     Locale_Initialize();
 
     SetVar("FONTCONFIG_FILE", "PROGDIR:fonts/config/fonts.conf", -1, LV_VAR | GVF_LOCAL_ONLY);
@@ -106,9 +113,10 @@ int main(int argc, char** argv)
         }
         else
         {
-            set(status, MUIA_Text_Contents, "Error: \33bTCP/IP stack is not running!\33n");
+            /* Start anyway: local pages work, and the engine reports the
+               missing stack per request instead of failing. */
+            set(status, MUIA_Text_Contents, "\33bNo TCP/IP stack:\33n network pages will not load");
             Delay(100);
-            goto error;
         }
 
         set(status, MUIA_Text_Contents, "Generating font cache...");
@@ -159,12 +167,20 @@ int main(int argc, char** argv)
 
             MUI_DisposeObject(app);
 
+            /* The browser process keeps its own copy; give the Shell back its own. */
+            me->pr_WindowPtr = oldWindowPtr;
             return 0;
         }
         else
         {
-            set(status, MUIA_Text_Contents, "Error: \33bCouldn't load Origyn Web Browser\33n");
-            Delay(100);
+            /* Say why: LoadSeg() fails, e.g., when the program's hunks do not
+               fit in memory the loader can map executable. */
+            static char reason[160];
+            char fault[100];
+            Fault(IoErr(), NULL, fault, sizeof(fault));
+            snprintf(reason, sizeof(reason), "Error: \33bCouldn't load Origyn Web Browser:\33n %s", fault);
+            set(status, MUIA_Text_Contents, reason);
+            Delay(250);
             goto error;
         }
 error:
@@ -175,6 +191,8 @@ error:
     }
 
     Locale_Deinitialize();
+
+    me->pr_WindowPtr = oldWindowPtr;
 
     if(url)
         FreeVec(url);
