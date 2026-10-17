@@ -29,7 +29,8 @@ CAIRO_OPTIONS := \
 #MM- contrib-development : contrib-cairo
 #MM- contrib-cairo : development-cairo
 
-#MM- development-cairo : workbench-libs-freetype-complete contrib-fontconfig contrib-gfx-libs-pixman-includes
+#MM- development-cairo : workbench-libs-freetype-complete contrib-fontconfig contrib-gfx-libs-pixman-includes \
+#MM     contrib-gfx-libs-pixman-linklib
 
 #MM development-cairo-meson : development-cairo-fetch
 
