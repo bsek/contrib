@@ -86,8 +86,29 @@ diff -ruN -X ./exclude.patterns webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c
  
 diff -ruN -X ./exclude.patterns webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6/Source/JavaScriptCore/jit/ExecutableAllocator.cpp webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6.aros/Source/JavaScriptCore/jit/ExecutableAllocator.cpp
 --- webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6/Source/JavaScriptCore/jit/ExecutableAllocator.cpp	2026-06-15 19:32:04
-+++ webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6.aros/Source/JavaScriptCore/jit/ExecutableAllocator.cpp	2026-10-05 07:15:35
-@@ -92,6 +92,9 @@
++++ webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6.aros/Source/JavaScriptCore/jit/ExecutableAllocator.cpp	2026-10-17 13:04:40
+@@ -74,6 +74,20 @@
+ WTF_WEAK_LINK_FORCE_IMPORT(be_memory_inline_jit_restrict_with_witness_supported);
+ #endif
+ 
++#if ENABLE(MPROTECT_RX_TO_RWX)
++// Makes JIT pages writable for the duration of a write, then executable
++// again. AROS never grants write and execute together: the pages go RW,
++// then back to RX.
++static void protectJITPages(void* start, size_t bytes, bool writing)
++{
++#if OS(AROS)
++    OSAllocator::protectJIT(start, bytes, writing);
++#else
++    mprotect(start, bytes, writing ? PROT_READ | PROT_WRITE | PROT_EXEC : PROT_READ | PROT_EXEC);
++#endif
++}
++#endif
++
+ namespace JSC {
+ 
+ using namespace WTF;
+@@ -92,6 +106,9 @@
  
  #if defined(FIXED_EXECUTABLE_MEMORY_POOL_SIZE_IN_MB) && FIXED_EXECUTABLE_MEMORY_POOL_SIZE_IN_MB > 0
  static constexpr size_t fixedExecutableMemoryPoolSize = FIXED_EXECUTABLE_MEMORY_POOL_SIZE_IN_MB * MB;
@@ -97,6 +118,58 @@ diff -ruN -X ./exclude.patterns webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c
  #elif CPU(ARM64)
  #if ENABLE(JUMP_ISLANDS)
  static constexpr size_t fixedExecutableMemoryPoolSize = 512 * MB;
+@@ -685,6 +702,11 @@
+ 
+     void startWriting(const void* start, size_t sizeInBytes)
+     {
++        // With branch compaction (ARM64), LinkBuffer assembles into a
++        // temporary buffer and copies it with performJITMemcpy(), which
++        // brackets its own write: only the JIT region needs a switch.
++        if (!isJITPC(const_cast<void*>(start)))
++            return;
+         size_t pageSize = executablePageSize();
+         auto [startPage, endPage] = pageRangeForWrittenRegion(start, sizeInBytes, pageSize);
+         uint8_t* startAddress = std::bit_cast<uint8_t*>(g_jscConfig.startExecutableMemory);
+@@ -697,17 +719,22 @@
+                     if (firstFirstWriterPage == -1)
+                         firstFirstWriterPage = i;
+                 } else if (firstFirstWriterPage != -1) {
+-                    mprotect(startAddress + pageSize * firstFirstWriterPage, (i - firstFirstWriterPage) * pageSize, PROT_READ | PROT_WRITE | PROT_EXEC);
++                    protectJITPages(startAddress + pageSize * firstFirstWriterPage, (i - firstFirstWriterPage) * pageSize, true);
+                     firstFirstWriterPage = -1;
+                 }
+             }
+             if (firstFirstWriterPage != -1)
+-                mprotect(startAddress + pageSize * firstFirstWriterPage, (endPage - firstFirstWriterPage) * pageSize, PROT_READ | PROT_WRITE | PROT_EXEC);
++                protectJITPages(startAddress + pageSize * firstFirstWriterPage, (endPage - firstFirstWriterPage) * pageSize, true);
+         }
+     }
+ 
+     void finishWriting(const void* start, size_t sizeInBytes)
+     {
++        // With branch compaction (ARM64), LinkBuffer assembles into a
++        // temporary buffer and copies it with performJITMemcpy(), which
++        // brackets its own write: only the JIT region needs a switch.
++        if (!isJITPC(const_cast<void*>(start)))
++            return;
+         size_t pageSize = executablePageSize();
+         auto [startPage, endPage] = pageRangeForWrittenRegion(start, sizeInBytes, pageSize);
+         uint8_t* startAddress = std::bit_cast<uint8_t*>(g_jscConfig.startExecutableMemory);
+@@ -720,12 +747,12 @@
+                     if (firstLastWriterPage == -1)
+                         firstLastWriterPage = i;
+                 } else if (firstLastWriterPage != -1) {
+-                    mprotect(startAddress + pageSize * firstLastWriterPage, (i - firstLastWriterPage) * pageSize, PROT_READ | PROT_EXEC);
++                    protectJITPages(startAddress + pageSize * firstLastWriterPage, (i - firstLastWriterPage) * pageSize, false);
+                     firstLastWriterPage = -1;
+                 }
+             }
+             if (firstLastWriterPage != -1)
+-                mprotect(startAddress + pageSize * firstLastWriterPage, (endPage - firstLastWriterPage) * pageSize, PROT_READ | PROT_EXEC);
++                protectJITPages(startAddress + pageSize * firstLastWriterPage, (endPage - firstLastWriterPage) * pageSize, false);
+         }
+     }
+ #endif
 diff -ruN -X ./exclude.patterns webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6/Source/JavaScriptCore/jit/PCToCodeOriginMap.h webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6.aros/Source/JavaScriptCore/jit/PCToCodeOriginMap.h
 --- webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6/Source/JavaScriptCore/jit/PCToCodeOriginMap.h	2026-06-15 19:32:04
 +++ webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6.aros/Source/JavaScriptCore/jit/PCToCodeOriginMap.h	2026-10-05 07:15:35
@@ -161,7 +234,7 @@ diff -ruN -X ./exclude.patterns webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c
  class Identifier;
 diff -ruN -X ./exclude.patterns webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6/Source/JavaScriptCore/runtime/Options.cpp webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6.aros/Source/JavaScriptCore/runtime/Options.cpp
 --- webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6/Source/JavaScriptCore/runtime/Options.cpp	2026-06-15 19:32:04
-+++ webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6.aros/Source/JavaScriptCore/runtime/Options.cpp	2026-10-05 07:15:35
++++ webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6.aros/Source/JavaScriptCore/runtime/Options.cpp	2026-10-17 12:13:03
 @@ -380,7 +380,7 @@
      if (id == maxSingleAllocationSizeID)
          return true;
@@ -185,7 +258,7 @@ diff -ruN -X ./exclude.patterns webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c
      if (kernTCSMAwareNumberOfProcessorCores() <= 2)
          return twoCorePriorityDelta;
  
-@@ -803,7 +810,9 @@
+@@ -803,8 +810,15 @@
      Options::useFTLJIT() = false;
  #endif
  
@@ -194,8 +267,14 @@ diff -ruN -X ./exclude.patterns webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c
 +    // AROS: collect on the mutator thread, as MorphOS (PPC) always has; the
 +    // concurrent collector is untested with this port's C loop interpreter.
      Options::useConcurrentGC() = false;
++#if OS(AROS)
++    // W^X: a page is RW (not executable) while it is written; a background
++    // compiler would write next to code the mutator is running.
++    Options::useConcurrentJIT() = false;
++#endif
      Options::forceUnlinkedDFG() = false;
      Options::useWasmSIMD() = false;
+     Options::useWasmIPInt() = false;
 diff -ruN -X ./exclude.patterns webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6/Source/JavaScriptCore/runtime/StructureID.h webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6.aros/Source/JavaScriptCore/runtime/StructureID.h
 --- webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6/Source/JavaScriptCore/runtime/StructureID.h	2026-06-15 19:32:04
 +++ webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6.aros/Source/JavaScriptCore/runtime/StructureID.h	2026-10-06 20:19:57
@@ -296,7 +375,7 @@ diff -ruN -X ./exclude.patterns webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c
  
 diff -ruN -X ./exclude.patterns webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6/Source/WTF/wtf/CurrentTime.cpp webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6.aros/Source/WTF/wtf/CurrentTime.cpp
 --- webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6/Source/WTF/wtf/CurrentTime.cpp	2026-06-15 19:32:04
-+++ webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6.aros/Source/WTF/wtf/CurrentTime.cpp	2026-10-09 09:52:11
++++ webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6.aros/Source/WTF/wtf/CurrentTime.cpp	2026-10-16 21:06:49
 @@ -337,6 +337,13 @@
      return fromRawSeconds(static_cast<double>(ts.tv_sec) + ts.tv_nsec / 1.0e9);
  #elif OS(HAIKU)
@@ -305,7 +384,7 @@ diff -ruN -X ./exclude.patterns webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c
 +    // Tasks run at EL1, so the generic timer reads directly; timer.device's
 +    // GetUpTime() disables interrupts on every query, and the wall clock moves.
 +    uint64_t ticks, frequency;
-+    asm volatile("isb\n\tmrs %0, cntpct_el0" : "=r"(ticks));
++    asm volatile("isb\n\tmrs %0, cntvct_el0" : "=r"(ticks));
 +    asm volatile("mrs %0, cntfrq_el0" : "=r"(frequency));
 +    return fromRawSeconds(static_cast<double>(ticks) / frequency);
  #else
@@ -313,8 +392,8 @@ diff -ruN -X ./exclude.patterns webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c
      double currentTimeNow = currentTime();
 diff -ruN -X ./exclude.patterns webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6/Source/WTF/wtf/FastMalloc.cpp webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6.aros/Source/WTF/wtf/FastMalloc.cpp
 --- webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6/Source/WTF/wtf/FastMalloc.cpp	2026-06-15 19:32:04
-+++ webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6.aros/Source/WTF/wtf/FastMalloc.cpp	2026-10-06 05:38:22
-@@ -153,8 +153,215 @@
++++ webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6.aros/Source/WTF/wtf/FastMalloc.cpp	2026-10-16 22:39:56
+@@ -153,8 +153,227 @@
  #include <malloc.h>
  #endif
  
@@ -338,7 +417,8 @@ diff -ruN -X ./exclude.patterns webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c
 +constexpr size_t spanSize = size_t(1) << spanShift;
 +constexpr size_t chunkSpans = 16;
 +constexpr size_t maxSmall = 16384;
-+constexpr uintptr_t mapLimit = uintptr_t(16) << 30;
++// Apple M1 DRAM starts at 32 GiB: cover 64 GiB (a 1 MiB span table).
++constexpr uintptr_t mapLimit = uintptr_t(64) << 30;
 +
 +constexpr std::array<uint16_t, 36> classSizes { 16, 32, 48, 64, 80, 96, 112, 128, 160, 192, 224, 256,
 +    320, 384, 448, 512, 640, 768, 896, 1024, 1280, 1536, 1792, 2048, 2560, 3072, 3584, 4096,
@@ -373,6 +453,7 @@ diff -ruN -X ./exclude.patterns webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c
 +uint8_t* s_spanEnd;
 +APTR s_pool;
 +bool s_dead;
++bool s_spanMapExhausted; // a chunk landed above the map: stop trying
 +
 +void spinLock(std::atomic<bool>& lock)
 +{
@@ -396,12 +477,22 @@ diff -ruN -X ./exclude.patterns webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c
 +{
 +    spinLock(s_spanLock);
 +    if (s_spanNext == s_spanEnd) {
++        if (s_spanMapExhausted) {
++            spinUnlock(s_spanLock);
++            return nullptr;
++        }
 +        if (!s_pool)
 +            s_pool = CreatePool(MEMF_ANY | MEMF_SEM_PROTECTED, (chunkSpans + 1) * spanSize, (chunkSpans + 1) * spanSize);
 +        auto* chunk = s_pool ? static_cast<uint8_t*>(AllocPooled(s_pool, (chunkSpans + 1) * spanSize)) : nullptr;
 +        if (!chunk || reinterpret_cast<uintptr_t>(chunk) + (chunkSpans + 1) * spanSize > mapLimit) {
++            // Give the chunk back: keeping it leaked about 1 MiB per call.
++            // Memory above the map never gets better, so fall back for good.
++            if (chunk) {
++                FreePooled(s_pool, chunk, (chunkSpans + 1) * spanSize);
++                s_spanMapExhausted = true;
++            }
 +            spinUnlock(s_spanLock);
-+            return nullptr; // (a chunk above the map is simply not used)
++            return nullptr;
 +        }
 +        s_spanNext = reinterpret_cast<uint8_t*>((reinterpret_cast<uintptr_t>(chunk) + spanSize - 1) & ~(spanSize - 1));
 +        s_spanEnd = s_spanNext + chunkSpans * spanSize;
@@ -530,7 +621,7 @@ diff -ruN -X ./exclude.patterns webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c
  bool isFastMallocEnabled()
  {
      return false;
-@@ -164,6 +371,8 @@
+@@ -164,6 +383,8 @@
  {
  #if OS(DARWIN)
      return malloc_good_size(bytes);
@@ -539,7 +630,7 @@ diff -ruN -X ./exclude.patterns webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c
  #else
      return bytes;
  #endif
-@@ -251,8 +460,12 @@
+@@ -251,8 +472,12 @@
      ASSERT_IS_WITHIN_LIMIT(n);
      assertMallocRestrictionForCurrentThreadScope();
      void* result = malloc(n);
@@ -553,7 +644,7 @@ diff -ruN -X ./exclude.patterns webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c
  
      return result;
  }
-@@ -285,8 +498,12 @@
+@@ -285,8 +510,12 @@
      ASSERT_IS_WITHIN_LIMIT(n_elements * element_size);
      assertMallocRestrictionForCurrentThreadScope();
      void* result = calloc(n_elements, element_size);
@@ -567,7 +658,7 @@ diff -ruN -X ./exclude.patterns webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c
  
      return result;
  }
-@@ -301,8 +518,12 @@
+@@ -301,8 +530,12 @@
      ASSERT_IS_WITHIN_LIMIT(n);
      assertMallocRestrictionForCurrentThreadScope();
      void* result = realloc(p, n);
@@ -581,7 +672,7 @@ diff -ruN -X ./exclude.patterns webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c
      return result;
  }
  
-@@ -330,6 +551,9 @@
+@@ -330,6 +563,9 @@
      return malloc_size(p);
  #elif OS(WINDOWS)
      return _msize(const_cast<void*>(p));
@@ -774,6 +865,20 @@ diff -ruN -X ./exclude.patterns webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c
      RunLoop::Timer m_morphosMeasurementTimer;
      void morphosMeasurementTimerFired();
  #endif
+diff -ruN -X ./exclude.patterns webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6/Source/WTF/wtf/OSAllocator.h webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6.aros/Source/WTF/wtf/OSAllocator.h
+--- webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6/Source/WTF/wtf/OSAllocator.h	2026-06-15 19:32:04
++++ webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6.aros/Source/WTF/wtf/OSAllocator.h	2026-10-17 12:13:23
+@@ -88,6 +88,10 @@
+ 
+     WTF_EXPORT_PRIVATE static void protect(void*, size_t, bool readable, bool writable);
+     WTF_EXPORT_PRIVATE static bool tryProtect(void*, size_t, bool readable, bool writable);
++#if OS(AROS)
++    // Executable reservations: RW while the JIT writes, RX otherwise.
++    WTF_EXPORT_PRIVATE static void protectJIT(void*, size_t, bool writable);
++#endif
+ };
+ 
+ inline void* OSAllocator::reserveAndCommit(size_t reserveSize, size_t commitSize, Usage usage, void* address, bool writable, bool executable, bool jitCageEnabled)
 diff -ruN -X ./exclude.patterns webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6/Source/WTF/wtf/PageBlock.cpp webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6.aros/Source/WTF/wtf/PageBlock.cpp
 --- webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6/Source/WTF/wtf/PageBlock.cpp	2026-06-15 19:32:04
 +++ webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6.aros/Source/WTF/wtf/PageBlock.cpp	2026-10-05 07:15:35
@@ -800,7 +905,7 @@ diff -ruN -X ./exclude.patterns webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c
  
 diff -ruN -X ./exclude.patterns webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6/Source/WTF/wtf/PlatformEnable.h webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6.aros/Source/WTF/wtf/PlatformEnable.h
 --- webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6/Source/WTF/wtf/PlatformEnable.h	2026-06-15 19:32:04
-+++ webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6.aros/Source/WTF/wtf/PlatformEnable.h	2026-10-05 07:15:35
++++ webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6.aros/Source/WTF/wtf/PlatformEnable.h	2026-10-17 12:13:03
 @@ -754,7 +754,9 @@
  #endif
  #endif
@@ -812,6 +917,19 @@ diff -ruN -X ./exclude.patterns webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c
  #if (CPU(ARM64) && CPU(ADDRESS64)) || CPU(ARM_THUMB2)
  #define ENABLE_JUMP_ISLANDS 1
  #endif
+@@ -965,6 +967,12 @@
+ 
+ #if ENABLE(DFG_JIT) && HAVE(MACHINE_CONTEXT) && (CPU(X86_64) || CPU(ARM64) || CPU(RISCV64))
+ #define ENABLE_SIGNAL_BASED_VM_TRAPS 1
++#endif
++
++/* AROS: the kernel enforces W^X, so JIT pages stay RX and every write is
++   bracketed by a switch to RW (see ExecutableAllocator.cpp). */
++#if !defined(ENABLE_MPROTECT_RX_TO_RWX) && OS(AROS) && ENABLE(JIT)
++#define ENABLE_MPROTECT_RX_TO_RWX 1
+ #endif
+ 
+ #if !defined(ENABLE_MPROTECT_RX_TO_RWX)
 diff -ruN -X ./exclude.patterns webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6/Source/WTF/wtf/PlatformHave.h webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6.aros/Source/WTF/wtf/PlatformHave.h
 --- webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6/Source/WTF/wtf/PlatformHave.h	2026-06-15 19:32:04
 +++ webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6.aros/Source/WTF/wtf/PlatformHave.h	2026-10-05 07:15:35
@@ -1346,7 +1464,7 @@ diff -ruN -X ./exclude.patterns webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c
      if (path.endsWith('/'))
 diff -ruN -X ./exclude.patterns webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6/Source/WTF/wtf/posix/OSAllocatorPOSIX.cpp webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6.aros/Source/WTF/wtf/posix/OSAllocatorPOSIX.cpp
 --- webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6/Source/WTF/wtf/posix/OSAllocatorPOSIX.cpp	2026-06-15 19:32:04
-+++ webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6.aros/Source/WTF/wtf/posix/OSAllocatorPOSIX.cpp	2026-10-05 07:15:35
++++ webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6.aros/Source/WTF/wtf/posix/OSAllocatorPOSIX.cpp	2026-10-17 12:41:54
 @@ -27,12 +27,16 @@
  #include <wtf/OSAllocator.h>
  
@@ -1364,7 +1482,7 @@ diff -ruN -X ./exclude.patterns webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c
  #include <wtf/PageBlock.h>
  #include <wtf/SafeStrerror.h>
  #include <wtf/text/CString.h>
-@@ -53,11 +57,88 @@
+@@ -53,11 +57,160 @@
  #include <wtf/spi/cocoa/MachVMSPI.h>
  #endif
  
@@ -1373,6 +1491,13 @@ diff -ruN -X ./exclude.patterns webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c
 +#include <exec/memory.h>
 +#include <mutex>
 +#include <proto/exec.h>
++#include <aros/debug.h>
++// <aros/kernel.h> names an enumerator SCHED_RR, which POSIX <sched.h>
++// (already included through WTF) defines as a macro.
++#pragma push_macro("SCHED_RR")
++#undef SCHED_RR
++#include <proto/kernel.h>
++#pragma pop_macro("SCHED_RR")
 +#endif
 +
  namespace WTF {
@@ -1400,14 +1525,75 @@ diff -ruN -X ./exclude.patterns webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c
 +    uint32_t magic;
 +    uint32_t executable;
 +    void* block;
++    size_t pages; // bytes of a page allocation, 0 for a pooled block
 +};
 +static constexpr uint32_t arosBlockMagic = 0x57544641; // 'WTFA'
++
++// Executable memory comes from kernel.resource's page allocator, the one
++// LoadSeg uses for code: on a W^X platform (Apple Silicon) the ordinary pool
++// is never executable, and MEMF_EXECUTABLE means nothing to AllocMem there.
++// The kernel enforces W^X: the pages start readable and executable, and
++// OSAllocator::protectJIT() makes them writable (and not executable) while
++// the JIT writes to them (MPROTECT_RX_TO_RWX in JavaScriptCore).
++static struct KernelBase* arosKernelBase()
++{
++    static struct KernelBase* base = static_cast<struct KernelBase*>(OpenResource("kernel.resource"));
++    return base;
++}
++
++void OSAllocator::protectJIT(void* address, size_t bytes, bool writable)
++{
++    struct KernelBase* KernelBase = arosKernelBase();
++    if (KernelBase)
++        KrnSetProtection(address, bytes, static_cast<KRN_MapAttr>(MAP_Readable | (writable ? MAP_Writable : MAP_Executable)));
++}
++
++static void* arosReserveExecutable(size_t bytes, size_t leading, size_t alignment)
++{
++    // The first page holds the block header and stays RW; the reservation
++    // starts page-aligned after it, so JSC's per-page write accounting
++    // (MPROTECT_RX_TO_RWX) matches the pages the kernel protects.
++    size_t headerPage = pageSize();
++    size_t padding = headerPage + leading + alignment;
++    size_t size = roundUpToMultipleOf(pageSize(), bytes + padding);
++    struct KernelBase* KernelBase = arosKernelBase();
++    uint8_t* block = KernelBase ? static_cast<uint8_t*>(KrnAllocPages(nullptr, size, MEMF_EXECUTABLE)) : nullptr;
++    uintptr_t result;
++    if (!block) {
++        // No page allocator (or an exhausted code arena): plain RAM, which
++        // is executable where the platform does not enforce W^X.
++        APTR pool = arosPool(true);
++        block = pool ? static_cast<uint8_t*>(AllocVecPooled(pool, bytes + sizeof(ArosBlockHeader) + leading + alignment)) : nullptr;
++        if (!block)
++            return nullptr;
++        size = 0;
++        result = reinterpret_cast<uintptr_t>(block) + sizeof(ArosBlockHeader) + leading;
++    } else
++        result = reinterpret_cast<uintptr_t>(block) + headerPage + leading;
++    if (alignment)
++        result = roundUpToMultipleOf(alignment, result);
++    auto* header = reinterpret_cast<ArosBlockHeader*>(result) - 1;
++    *header = { arosBlockMagic, 1, block, size };
++    if (size) {
++        // W^X: RX from the start; JSC brackets every write with RW (see
++        // MPROTECT_RX_TO_RWX in ExecutableAllocator.cpp). The header page
++        // (and any leading guard pages) keep their RW mapping.
++        uintptr_t executable = reinterpret_cast<uintptr_t>(block) + headerPage;
++        while (executable + pageSize() <= result)
++            executable += pageSize();
++        KrnSetProtection(reinterpret_cast<void*>(executable), reinterpret_cast<uintptr_t>(block) + size - executable,
++            static_cast<KRN_MapAttr>(MAP_Readable | MAP_Executable));
++    }
++    return reinterpret_cast<void*>(result);
++}
 +
 +// bytes from the returned address on (trailing guard pages included);
 +// leading guard pages, if any, are in front of it. Guard pages are plain RAM.
 +static void* arosReserve(size_t bytes, bool executable, size_t leading, size_t alignment)
 +{
-+    APTR pool = arosPool(executable);
++    if (executable)
++        return arosReserveExecutable(bytes, leading, alignment);
++    APTR pool = arosPool(false);
 +    size_t padding = sizeof(ArosBlockHeader) + leading + alignment;
 +    auto* block = pool ? static_cast<uint8_t*>(AllocVecPooled(pool, bytes + padding)) : nullptr;
 +    if (!block)
@@ -1416,7 +1602,7 @@ diff -ruN -X ./exclude.patterns webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c
 +    if (alignment)
 +        result = roundUpToMultipleOf(alignment, result);
 +    auto* header = reinterpret_cast<ArosBlockHeader*>(result) - 1;
-+    *header = { arosBlockMagic, executable, block };
++    *header = { arosBlockMagic, 0, block, 0 };
 +    return reinterpret_cast<void*>(result);
 +}
 +
@@ -1425,7 +1611,11 @@ diff -ruN -X ./exclude.patterns webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c
 +    auto* header = static_cast<ArosBlockHeader*>(address) - 1;
 +    RELEASE_ASSERT(header->magic == arosBlockMagic);
 +    header->magic = 0;
-+    FreeVecPooled(s_arosPools[header->executable], header->block);
++    if (header->pages) {
++        struct KernelBase* KernelBase = arosKernelBase();
++        KrnFreePages(header->block, header->pages);
++    } else
++        FreeVecPooled(s_arosPools[header->executable], header->block);
 +}
 +
 +static void arosDeletePools()
@@ -1454,7 +1644,7 @@ diff -ruN -X ./exclude.patterns webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c
      return malloc(bytes);
  #else
      // All POSIX reservations start out logically committed.
-@@ -152,7 +233,14 @@
+@@ -152,7 +305,14 @@
  {
      ASSERT(hasOneBitSet(alignment) && alignment >= pageSize());
  
@@ -1470,7 +1660,7 @@ diff -ruN -X ./exclude.patterns webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c
      ASSERT_UNUSED(numGuardPagesToAddOnEachEnd, !numGuardPagesToAddOnEachEnd);
      ASSERT_UNUSED(jitCageEnabled, !jitCageEnabled); // Not supported for mach API.
      vm_prot_t protections = VM_PROT_READ;
-@@ -275,7 +363,11 @@
+@@ -275,7 +435,11 @@
  
  void OSAllocator::releaseDecommitted(void* address, size_t bytes, unsigned numberOfGuardPagesOnEachEnd = 0)
  {
@@ -1483,7 +1673,7 @@ diff -ruN -X ./exclude.patterns webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c
      free(address);
  #else
      void* base = address;
-@@ -294,7 +386,7 @@
+@@ -294,7 +458,7 @@
  
  bool OSAllocator::tryProtect(void* address, size_t bytes, bool readable, bool writable)
  {
@@ -3033,8 +3223,8 @@ diff -ruN -X ./exclude.patterns webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c
  
 diff -ruN -X ./exclude.patterns webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6/Source/WebCore/platform/graphics/morphos/AcinerellaVideoDecoder.cpp webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6.aros/Source/WebCore/platform/graphics/morphos/AcinerellaVideoDecoder.cpp
 --- webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6/Source/WebCore/platform/graphics/morphos/AcinerellaVideoDecoder.cpp	2026-06-15 19:32:04
-+++ webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6.aros/Source/WebCore/platform/graphics/morphos/AcinerellaVideoDecoder.cpp	2026-10-08 07:01:45
-@@ -16,6 +16,11 @@
++++ webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6.aros/Source/WebCore/platform/graphics/morphos/AcinerellaVideoDecoder.cpp	2026-10-16 18:32:16
+@@ -16,6 +16,31 @@
  
  #include <libavcodec/avcodec.h>
  #include <libavformat/avformat.h>
@@ -3043,10 +3233,30 @@ diff -ruN -X ./exclude.patterns webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c
 +#include <libswscale/swscale.h>
 +}
 +#endif
++#if OS(AROS)
++// AROS's cgxvideo.library is v41: it lacks the v43 YCbCr420 and
++// double-buffer API the overlay path uses. That path is never taken here
++// (m_cgxVideo stays null), so these only let it compile.
++#ifndef SRCFMT_YCbCr420
++#define SRCFMT_YCbCr420 0
++#endif
++#ifndef VOA_DoubleBuffer
++#define VOA_DoubleBuffer TAG_IGNORE
++#endif
++#ifndef VOA_ColorKeyFill
++#define VOA_ColorKeyFill TAG_IGNORE
++#endif
++#ifndef VOA_Modulo
++#define VOA_Modulo VOA_SrcWidth
++#endif
++#ifndef SwapVLayerBuffer
++#define SwapVLayerBuffer(handle) ((void)(handle))
++#endif
++#endif
  
  #include <cairo.h>
  
-@@ -62,7 +67,12 @@
+@@ -62,7 +87,12 @@
      if (decoder)
          ac_decoder_set_loopfilter(decoder, int(m_client->streamSettings().m_loopFilter));
  	
@@ -3059,7 +3269,7 @@ diff -ruN -X ./exclude.patterns webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c
   
  	m_pullThread = Thread::create("Acinerella Video Pump"_s, [this] {
  		pullThreadEntryPoint();
-@@ -83,6 +93,11 @@
+@@ -83,6 +113,11 @@
  
      if (m_cgxVideo)
          CloseLibrary(m_cgxVideo);
@@ -3071,7 +3281,7 @@ diff -ruN -X ./exclude.patterns webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c
   
  	if (!!m_pullThread)
  	{
-@@ -99,6 +114,15 @@
+@@ -99,6 +134,15 @@
      ac_decoder_set_loopfilter(decoder, int(m_client->streamSettings().m_loopFilter));
  }
  
@@ -3087,7 +3297,7 @@ diff -ruN -X ./exclude.patterns webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c
  bool AcinerellaVideoDecoder::isReadyToPlay() const
  {
  	return isWarmedUp() && (m_didShowFirstFrame || m_ismjpeg);
-@@ -194,7 +218,7 @@
+@@ -194,7 +238,7 @@
      #endif
  
  	m_pullEvent.signal();
@@ -3096,7 +3306,7 @@ diff -ruN -X ./exclude.patterns webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c
  	{
  	// caled under locks!
  		showFirstFrame(false);
-@@ -440,6 +464,30 @@
+@@ -440,6 +484,30 @@
  {
  	WebCore::GraphicsContextCairo *context = gc.platformContext();
  	cairo_t* cr = context->cr();
@@ -3127,7 +3337,7 @@ diff -ruN -X ./exclude.patterns webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c
  	cairo_save(cr);
  	cairo_set_source_rgb(cr, double((m_overlayFillColor >> 16) & 0xff) / 255.0, double((m_overlayFillColor >> 8) & 0xff) / 255.0,
  		double(m_overlayFillColor & 0xff) / 255.0);
-@@ -460,8 +508,44 @@
+@@ -460,8 +528,44 @@
  	}
  }
  
@@ -3172,7 +3382,7 @@ diff -ruN -X ./exclude.patterns webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c
  	if (m_overlayHandle && m_decodedFrames.size())
  	{
  		auto *frame = m_decodedFrames.first().frame();
-@@ -587,7 +671,7 @@
+@@ -587,7 +691,7 @@
  #ifdef FORCEDECODE
  		if (m_playing && !m_terminating)
  #else
@@ -3181,7 +3391,7 @@ diff -ruN -X ./exclude.patterns webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c
  #endif
  		{
  			// D(dprintf("\033[36m[VD]%s: %p nf\033[0m\n", __func__, this));
-@@ -651,6 +735,7 @@
+@@ -651,6 +755,7 @@
  							m_bufferedSeconds -= m_frameDuration;
  
  							m_frameCount++;
@@ -3189,7 +3399,7 @@ diff -ruN -X ./exclude.patterns webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c
  							didShowFrame = true;
  						}
  						else
-@@ -672,7 +757,9 @@
+@@ -672,7 +777,9 @@
  						if (changePosition)
  						{
  							onPositionChanged();
@@ -5333,7 +5543,7 @@ diff -ruN -X ./exclude.patterns webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c
      bool m_trackMiddle { false };
 diff -ruN -X ./exclude.patterns webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6/Source/WebKitLegacy/morphos/WebProcess.cpp webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6.aros/Source/WebKitLegacy/morphos/WebProcess.cpp
 --- webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6/Source/WebKitLegacy/morphos/WebProcess.cpp	2026-06-15 19:32:04
-+++ webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6.aros/Source/WebKitLegacy/morphos/WebProcess.cpp	2026-10-06 22:37:02
++++ webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c6.aros/Source/WebKitLegacy/morphos/WebProcess.cpp	2026-10-16 22:40:15
 @@ -37,6 +37,7 @@
  #include <WebCore/CrossOriginPreflightResultCache.h>
  #include <WebCore/ResourceLoadInfo.h>
@@ -5429,7 +5639,7 @@ diff -ruN -X ./exclude.patterns webkitty-92a028771447e78f68a1586070fd4f3d36b3a6c
 +	lastCheck = now;
 +
 +	constexpr ULONG lowMemory = 96 * 1024 * 1024;
-+	ULONG avail = AvailMem(MEMF_ANY);
++	IPTR avail = AvailMem(MEMF_ANY);
 +	if (avail >= lowMemory || now - lastRelease < 10_s)
 +		return;
 +	lastRelease = now;

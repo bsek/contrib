@@ -1,6 +1,6 @@
-diff -ruN --strip-trailing-cr curl-8.21.0/configure curl-8.21.0.aros/configure
---- curl-8.21.0/configure	2026-06-24 06:53:29.000000000 +0100
-+++ curl-8.21.0.aros/configure	2026-07-28 21:26:25.919710494 +0100
+diff -ruN curl-8.21.0/configure curl-8.21.0.aros/configure
+--- curl-8.21.0/configure	2026-06-24 05:53:29
++++ curl-8.21.0.aros/configure	2026-07-28 20:26:25
 @@ -48402,6 +48402,9 @@
            powerpc-*amigaos*)
                          PTHREAD=" -lpthread"
@@ -11,9 +11,9 @@ diff -ruN --strip-trailing-cr curl-8.21.0/configure curl-8.21.0.aros/configure
            *)
              CFLAGS="$CFLAGS -pthread"
              ;;
-diff -ruN --strip-trailing-cr curl-8.21.0/configure.ac curl-8.21.0.aros/configure.ac
---- curl-8.21.0/configure.ac	2026-06-24 06:53:29.000000000 +0100
-+++ curl-8.21.0.aros/configure.ac	2026-07-28 21:26:25.917311394 +0100
+diff -ruN curl-8.21.0/configure.ac curl-8.21.0.aros/configure.ac
+--- curl-8.21.0/configure.ac	2026-06-24 05:53:29
++++ curl-8.21.0.aros/configure.ac	2026-07-28 20:26:25
 @@ -4288,6 +4288,10 @@
              dnl No -pthread option, but link with -lpthread
              PTHREAD=" -lpthread"
@@ -25,15 +25,16 @@ diff -ruN --strip-trailing-cr curl-8.21.0/configure.ac curl-8.21.0.aros/configur
            *)
              CFLAGS="$CFLAGS -pthread"
              ;;
-diff -ruN --strip-trailing-cr curl-8.21.0/lib/amigaos.c curl-8.21.0.aros/lib/amigaos.c
---- curl-8.21.0/lib/amigaos.c
-+++ curl-8.21.0.aros/lib/amigaos.c
-@@ -237,3 +237,78 @@
+diff -ruN curl-8.21.0/lib/amigaos.c curl-8.21.0.aros/lib/amigaos.c
+--- curl-8.21.0/lib/amigaos.c	2026-06-24 05:53:29
++++ curl-8.21.0.aros/lib/amigaos.c	2026-10-17 02:05:59
+@@ -237,3 +237,85 @@
  #endif /* HAVE_PROTO_BSDSOCKET_H */
  
  #endif /* __AMIGA__ */
 +
 +#ifdef __AROS__
++#include <unistd.h>
 +/*
 + * Per-thread bsdsocket.library base (see curl_setup.h). Opened on a thread's
 + * first socket call and closed when the thread exits.
@@ -104,12 +105,37 @@ diff -ruN --strip-trailing-cr curl-8.21.0/lib/amigaos.c curl-8.21.0.aros/lib/ami
 +int Curl_aros_select(int nfds, fd_set *readfds, fd_set *writefds,
 +                     fd_set *errorfds, struct timeval *timeout)
 +{
++  if(!Curl_aros_SocketBase()) {
++    /* no TCP/IP stack: nothing can become ready, just wait */
++    if(timeout)
++      usleep((useconds_t)(timeout->tv_sec * 1000000 + timeout->tv_usec));
++    return 0;
++  }
 +  return WaitSelect(nfds, readfds, writefds, errorfds, timeout, NULL);
 +}
 +#endif /* __AROS__ */
-diff -ruN --strip-trailing-cr curl-8.21.0/lib/curl_setup.h curl-8.21.0.aros/lib/curl_setup.h
---- curl-8.21.0/lib/curl_setup.h
-+++ curl-8.21.0.aros/lib/curl_setup.h
+diff -ruN curl-8.21.0/lib/cf-socket.c curl-8.21.0.aros/lib/cf-socket.c
+--- curl-8.21.0/lib/cf-socket.c	2026-06-24 05:53:29
++++ curl-8.21.0.aros/lib/cf-socket.c	2026-10-17 02:05:59
+@@ -420,6 +420,15 @@
+ 
+   DEBUGASSERT(data);
+   DEBUGASSERT(data->conn);
++#ifdef __AROS__
++  /* No TCP/IP stack running: bsdsocket.library does not open, and every
++     socket call would go through a NULL base. Fail the connect instead. */
++  if(!data->set.fopensocket && !SocketBase) {
++    failf(data, "No TCP/IP stack: bsdsocket.library is not available");
++    *sockfd = CURL_SOCKET_BAD;
++    return CURLE_COULDNT_CONNECT;
++  }
++#endif
+   if(data->set.fopensocket) {
+     /*
+      * If the opensocket callback is set, all the destination address
+diff -ruN curl-8.21.0/lib/curl_setup.h curl-8.21.0.aros/lib/curl_setup.h
+--- curl-8.21.0/lib/curl_setup.h	2026-06-24 05:53:29
++++ curl-8.21.0.aros/lib/curl_setup.h	2026-07-28 20:26:25
 @@ -671,6 +671,30 @@
  
  #  endif /* MSDOS */
@@ -153,9 +179,9 @@ diff -ruN --strip-trailing-cr curl-8.21.0/lib/curl_setup.h curl-8.21.0.aros/lib/
  #else
  #define SOCKERRNO         errno
  #define SET_SOCKERRNO(x)  (errno = (x))
-diff -ruN --strip-trailing-cr curl-8.21.0/lib/curlx/wait.c curl-8.21.0.aros/lib/curlx/wait.c
---- curl-8.21.0/lib/curlx/wait.c
-+++ curl-8.21.0.aros/lib/curlx/wait.c
+diff -ruN curl-8.21.0/lib/curlx/wait.c curl-8.21.0.aros/lib/curlx/wait.c
+--- curl-8.21.0/lib/curlx/wait.c	2026-06-24 05:53:29
++++ curl-8.21.0.aros/lib/curlx/wait.c	2026-07-28 20:26:25
 @@ -33,6 +33,10 @@
  #include <unistd.h>
  #endif
@@ -178,9 +204,9 @@ diff -ruN --strip-trailing-cr curl-8.21.0/lib/curlx/wait.c curl-8.21.0.aros/lib/
  #else
    /* avoid using poll() for this since it behaves incorrectly with no sockets
       on Apple operating systems */
-diff -ruN --strip-trailing-cr curl-8.21.0/lib/hostip4.c curl-8.21.0.aros/lib/hostip4.c
---- curl-8.21.0/lib/hostip4.c
-+++ curl-8.21.0.aros/lib/hostip4.c
+diff -ruN curl-8.21.0/lib/hostip4.c curl-8.21.0.aros/lib/hostip4.c
+--- curl-8.21.0/lib/hostip4.c	2026-06-24 05:53:29
++++ curl-8.21.0.aros/lib/hostip4.c	2026-07-28 20:26:25
 @@ -110,6 +110,12 @@
    struct hostent *buf = NULL;
  #endif

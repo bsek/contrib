@@ -30,6 +30,7 @@ FILES :=               \
 	tabbedview         \
 	bookmarkmanager    \
 	browserwindow      \
+	crashlog           \
 	browserapp
 
 #MM- contrib-networking-apps: contrib-networking-apps-owb-$(BUILDOWB)
@@ -51,7 +52,7 @@ FILES :=               \
 #MM                        contrib-networking-apps-startowb      \
 #MM                        contrib-networking-apps-owb-quick
 
-#MM contrib-networking-apps-owb-resources : contrib-networking-apps-owb-icons iconset-$(AROS_TARGET_ICONSET)-contrib-icons-owb contrib-networking-apps-owb-readme \
+#MM- contrib-networking-apps-owb-resources : contrib-networking-apps-owb-icons iconset-$(AROS_TARGET_ICONSET)-contrib-icons-owb contrib-networking-apps-owb-readme \
 #MM     contrib-networking-apps-owb-icudata
 
 I18N_LIBS=

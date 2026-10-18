@@ -36,6 +36,9 @@ WEBKITTY_OPTIONS := \
 #MM     contrib-fontconfig workbench-libs-freetype-complete workbench-libs-jpeg \
 #MM     workbench-libs-png-linklib contrib-libxslt contrib-sqlite contrib-libpsl \
 #MM     contrib-curl contrib-openssl contrib-ffmpeg linklibs-webp contrib-woff2 external-openurl-lib linklibs-pthread \
+#MM     contrib-brotli contrib-libiconv external-bz2-lib-linklib \
+#MM     workbench-libs-lzma-library-linklib workbench-libs-zstd-library-linklib \
+#MM     workbench-libs-cgxvideo \
 #MM     contrib-zune-classes-webkitty-fetch
 
 %fetch mmake=contrib-zune-classes-webkitty-fetch archive=$(ARCHBASE) \
